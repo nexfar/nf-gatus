@@ -45,6 +45,8 @@ func (a *API) Router() *fiber.App {
 }
 
 func (a *API) createRouter(cfg *config.Config) *fiber.App {
+	// Make the tenancy configuration available to request handlers for subdomain-based filtering.
+	tenancyConfig = cfg.Tenancy
 	app := fiber.New(fiber.Config{
 		ErrorHandler: func(c *fiber.Ctx, err error) error {
 			logr.Errorf("[api.ErrorHandler] %s", err.Error())

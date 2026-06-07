@@ -58,6 +58,9 @@ func UptimeBadge(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(400).SendString("invalid key encoding")
 	}
+	if denyKeyForTenant(c, key) {
+		return c.Status(404).SendString("not found")
+	}
 	uptime, err := store.Get().GetUptimeByKey(key, from, time.Now())
 	if err != nil {
 		if errors.Is(err, common.ErrEndpointNotFound) {
@@ -96,6 +99,9 @@ func ResponseTimeBadge(cfg *config.Config) fiber.Handler {
 		if err != nil {
 			return c.Status(400).SendString("invalid key encoding")
 		}
+		if denyKeyForTenant(c, key) {
+			return c.Status(404).SendString("not found")
+		}
 		averageResponseTime, err := store.Get().GetAverageResponseTimeByKey(key, from, time.Now())
 		if err != nil {
 			if errors.Is(err, common.ErrEndpointNotFound) {
@@ -117,6 +123,9 @@ func HealthBadge(c *fiber.Ctx) error {
 	key, err := url.QueryUnescape(c.Params("key"))
 	if err != nil {
 		return c.Status(400).SendString("invalid key encoding")
+	}
+	if denyKeyForTenant(c, key) {
+		return c.Status(404).SendString("not found")
 	}
 	pagingConfig := paging.NewEndpointStatusParams()
 	status, err := store.Get().GetEndpointStatusByKey(key, pagingConfig.WithResults(1, 1))
@@ -146,6 +155,9 @@ func HealthBadgeShields(c *fiber.Ctx) error {
 	key, err := url.QueryUnescape(c.Params("key"))
 	if err != nil {
 		return c.Status(400).SendString("invalid key encoding")
+	}
+	if denyKeyForTenant(c, key) {
+		return c.Status(404).SendString("not found")
 	}
 	pagingConfig := paging.NewEndpointStatusParams()
 	status, err := store.Get().GetEndpointStatusByKey(key, pagingConfig.WithResults(1, 1))

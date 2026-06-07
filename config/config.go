@@ -23,6 +23,7 @@ import (
 	"github.com/TwiN/gatus/v5/config/maintenance"
 	"github.com/TwiN/gatus/v5/config/remote"
 	"github.com/TwiN/gatus/v5/config/suite"
+	"github.com/TwiN/gatus/v5/config/tenancy"
 	"github.com/TwiN/gatus/v5/config/tunneling"
 	"github.com/TwiN/gatus/v5/config/ui"
 	"github.com/TwiN/gatus/v5/config/web"
@@ -106,6 +107,9 @@ type Config struct {
 
 	// UI is the configuration for the UI
 	UI *ui.Config `yaml:"ui,omitempty"`
+
+	// Tenancy is the configuration for subdomain-based multi-tenancy
+	Tenancy *tenancy.Config `yaml:"tenancy,omitempty"`
 
 	// Maintenance is the configuration for creating a maintenance window in which no alerts are sent
 	Maintenance *maintenance.Config `yaml:"maintenance,omitempty"`
@@ -314,6 +318,9 @@ func parseAndValidateConfigBytes(yamlBytes []byte) (config *Config, err error) {
 		if err := ValidateUIConfig(config); err != nil {
 			return nil, err
 		}
+		if err := ValidateTenancyConfig(config); err != nil {
+			return nil, err
+		}
 		if err := ValidateMaintenanceConfig(config); err != nil {
 			return nil, err
 		}
@@ -458,6 +465,13 @@ func ValidateUIConfig(config *Config) error {
 		if err := config.UI.ValidateAndSetDefaults(); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func ValidateTenancyConfig(config *Config) error {
+	if config.Tenancy != nil {
+		return config.Tenancy.ValidateAndSetDefaults()
 	}
 	return nil
 }

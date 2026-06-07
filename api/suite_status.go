@@ -29,6 +29,16 @@ func SuiteStatuses(cfg *config.Config) fiber.Handler {
 				}
 			}
 		}
+		// Filter down to the tenant's group when the request is scoped to a subdomain
+		if tenant := tenantFromRequest(c); tenant != "" {
+			filtered := make([]*suite.Status, 0, len(suiteStatuses))
+			for _, suiteStatus := range suiteStatuses {
+				if statusBelongsToTenant(suiteStatus.Key, tenant) {
+					filtered = append(filtered, suiteStatus)
+				}
+			}
+			suiteStatuses = filtered
+		}
 		return c.Status(fiber.StatusOK).JSON(suiteStatuses)
 	}
 }
@@ -38,6 +48,11 @@ func SuiteStatus(cfg *config.Config) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		page, pageSize := extractPageAndPageSizeFromRequest(c, 100)
 		key := c.Params("key")
+		if denyKeyForTenant(c, key) {
+			return c.Status(404).JSON(fiber.Map{
+				"error": fmt.Sprintf("Suite with key '%s' not found", key),
+			})
+		}
 		params := paging.NewSuiteStatusParams().WithPagination(page, pageSize)
 		status, err := store.Get().GetSuiteStatusByKey(key, params)
 		if err != nil || status == nil {

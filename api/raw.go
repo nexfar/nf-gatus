@@ -30,6 +30,9 @@ func UptimeRaw(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(400).SendString("invalid key encoding")
 	}
+	if denyKeyForTenant(c, key) {
+		return c.Status(404).SendString("not found")
+	}
 	uptime, err := store.Get().GetUptimeByKey(key, from, time.Now())
 	if err != nil {
 		if errors.Is(err, common.ErrEndpointNotFound) {
@@ -64,6 +67,9 @@ func ResponseTimeRaw(c *fiber.Ctx) error {
 	key, err := url.QueryUnescape(c.Params("key"))
 	if err != nil {
 		return c.Status(400).SendString("invalid key encoding")
+	}
+	if denyKeyForTenant(c, key) {
+		return c.Status(404).SendString("not found")
 	}
 	responseTime, err := store.Get().GetAverageResponseTimeByKey(key, from, time.Now())
 	if err != nil {
