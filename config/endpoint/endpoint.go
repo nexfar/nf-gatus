@@ -85,6 +85,12 @@ type Endpoint struct {
 	// Name of the endpoint. Can be anything.
 	Name string `yaml:"name"`
 
+	// ID optionally overrides the name in the derivation of the endpoint's unique key
+	// (see Key). Setting it decouples the key from the display name, so the endpoint can
+	// be renamed freely without resetting its history or changing its badge URLs.
+	// When empty, the key is derived from the name. See docs/endpoint-id.md.
+	ID string `yaml:"id,omitempty"`
+
 	// Group the endpoint is a part of. Used for grouping multiple endpoints together on the front end.
 	Group string `yaml:"group,omitempty"`
 
@@ -278,8 +284,12 @@ func (e *Endpoint) DisplayName() string {
 	return e.Name
 }
 
-// Key returns the unique key for the Endpoint
+// Key returns the unique key for the Endpoint, derived from the group and the ID
+// when one is set, otherwise from the group and the name.
 func (e *Endpoint) Key() string {
+	if len(e.ID) > 0 {
+		return key.ConvertGroupAndNameToKey(e.Group, e.ID)
+	}
 	return key.ConvertGroupAndNameToKey(e.Group, e.Name)
 }
 

@@ -329,6 +329,15 @@ func TestEndpoint_IsEnabled(t *testing.T) {
 	}
 }
 
+func TestEndpoint_Key(t *testing.T) {
+	if key := (&Endpoint{Name: "name", Group: "group"}).Key(); key != "group_name" {
+		t.Errorf("expected group_name, got %s", key)
+	}
+	if key := (&Endpoint{Name: "Friendly Display Name", ID: "stable-id", Group: "group"}).Key(); key != "group_stable-id" {
+		t.Errorf("expected group_stable-id, got %s", key)
+	}
+}
+
 func TestEndpoint_Type(t *testing.T) {
 	type args struct {
 		URL string

@@ -28,6 +28,13 @@ type ExternalEndpoint struct {
 	// Name of the endpoint. Can be anything.
 	Name string `yaml:"name"`
 
+	// ID optionally overrides the name in the derivation of the endpoint's unique key
+	// (see Key). Setting it decouples the key — and therefore the push URL
+	// (/api/v1/endpoints/{key}/external) — from the display name, so the endpoint can be
+	// renamed freely without breaking pushers or resetting its history.
+	// When empty, the key is derived from the name. See docs/endpoint-id.md.
+	ID string `yaml:"id,omitempty"`
+
 	// Group the endpoint is a part of. Used for grouping multiple endpoints together on the front end.
 	Group string `yaml:"group,omitempty"`
 
@@ -88,8 +95,12 @@ func (externalEndpoint *ExternalEndpoint) DisplayName() string {
 	return externalEndpoint.Name
 }
 
-// Key returns the unique key for the Endpoint
+// Key returns the unique key for the Endpoint, derived from the group and the ID
+// when one is set, otherwise from the group and the name.
 func (externalEndpoint *ExternalEndpoint) Key() string {
+	if len(externalEndpoint.ID) > 0 {
+		return key.ConvertGroupAndNameToKey(externalEndpoint.Group, externalEndpoint.ID)
+	}
 	return key.ConvertGroupAndNameToKey(externalEndpoint.Group, externalEndpoint.Name)
 }
 
@@ -98,6 +109,7 @@ func (externalEndpoint *ExternalEndpoint) ToEndpoint() *Endpoint {
 	endpoint := &Endpoint{
 		Enabled:                 externalEndpoint.Enabled,
 		Name:                    externalEndpoint.Name,
+		ID:                      externalEndpoint.ID,
 		Group:                   externalEndpoint.Group,
 		Alerts:                  externalEndpoint.Alerts,
 		NumberOfFailuresInARow:  externalEndpoint.NumberOfFailuresInARow,

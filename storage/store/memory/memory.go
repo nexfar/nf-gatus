@@ -196,10 +196,16 @@ func (s *Store) InsertEndpointResult(ep *endpoint.Endpoint, result *endpoint.Res
 	status, exists := s.endpointCache.Get(endpointKey)
 	if !exists {
 		status = endpoint.NewStatus(ep.Group, ep.Name)
+		// NewStatus derives the key from the group and name, which diverges from the
+		// actual key for endpoints configured with an explicit id.
+		status.(*endpoint.Status).Key = endpointKey
 		status.(*endpoint.Status).Events = append(status.(*endpoint.Status).Events, &endpoint.Event{
 			Type:      endpoint.EventStart,
 			Timestamp: time.Now(),
 		})
+	} else {
+		// Endpoints with an explicit id keep the same key when renamed — sync the name.
+		status.(*endpoint.Status).Name = ep.Name
 	}
 	AddResult(status.(*endpoint.Status), result, s.maximumNumberOfResults, s.maximumNumberOfEvents)
 	s.endpointCache.Set(endpointKey, status)

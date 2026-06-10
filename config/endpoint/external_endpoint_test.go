@@ -224,6 +224,15 @@ func TestExternalEndpoint_Key(t *testing.T) {
 			},
 			expected: "test-group_test-endpoint-with-spaces",
 		},
+		{
+			name: "id-overrides-name",
+			endpoint: &ExternalEndpoint{
+				Name:  "Friendly Display Name",
+				ID:    "stable-id",
+				Group: "test-group",
+			},
+			expected: "test-group_stable-id",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -284,6 +293,15 @@ func TestExternalEndpoint_ToEndpoint(t *testing.T) {
 				Group: "group",
 			},
 		},
+		{
+			name: "external-endpoint-with-id",
+			externalEndpoint: &ExternalEndpoint{
+				Name:  "Friendly Display Name",
+				ID:    "stable-id",
+				Group: "group",
+				Token: "token",
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -297,6 +315,9 @@ func TestExternalEndpoint_ToEndpoint(t *testing.T) {
 			}
 			if result.Group != tt.externalEndpoint.Group {
 				t.Errorf("Expected Group=%q, got %q", tt.externalEndpoint.Group, result.Group)
+			}
+			if result.ID != tt.externalEndpoint.ID {
+				t.Errorf("Expected ID=%q, got %q", tt.externalEndpoint.ID, result.ID)
 			}
 			if len(result.Alerts) != len(tt.externalEndpoint.Alerts) {
 				t.Errorf("Expected %d alerts, got %d", len(tt.externalEndpoint.Alerts), len(result.Alerts))

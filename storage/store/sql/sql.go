@@ -255,6 +255,14 @@ func (s *Store) InsertEndpointResult(ep *endpoint.Endpoint, result *endpoint.Res
 			logr.Errorf("[sql.InsertEndpointResult] Failed to retrieve id of endpoint with key=%s: %s", ep.Key(), err.Error())
 			return err
 		}
+	} else if len(ep.ID) > 0 {
+		// Endpoints with an explicit id keep the same key when renamed, so the row
+		// created on first insert must have its display name kept in sync.
+		if _, err := tx.Exec("UPDATE endpoints SET endpoint_name = $1 WHERE endpoint_id = $2 AND endpoint_name != $1", ep.Name, endpointID); err != nil {
+			_ = tx.Rollback()
+			logr.Errorf("[sql.InsertEndpointResult] Failed to sync name of endpoint with key=%s: %s", ep.Key(), err.Error())
+			return err
+		}
 	}
 	// First, we need to check if we need to insert a new event.
 	//
@@ -723,6 +731,9 @@ func (s *Store) getEndpointStatusByKey(tx *sql.Tx, key string, parameters *pagin
 		return nil, err
 	}
 	endpointStatus := endpoint.NewStatus(group, endpointName)
+	// NewStatus derives the key from the group and name, which diverges from the actual
+	// key for endpoints configured with an explicit id — use the stored key instead.
+	endpointStatus.Key = key
 	if parameters.EventsPageSize > 0 {
 		if endpointStatus.Events, err = s.getEndpointEventsByEndpointID(tx, endpointID, parameters.EventsPage, parameters.EventsPageSize); err != nil {
 			logr.Errorf("[sql.getEndpointStatusByKey] Failed to retrieve events for key=%s: %s", key, err.Error())
