@@ -22,8 +22,9 @@ func TestTenantFiltering(t *testing.T) {
 	cfg := &config.Config{
 		Tenancy: &tenancy.Config{RootDomain: "status.nexfar.com.br"},
 		Endpoints: []*endpoint.Endpoint{
-			{Name: "api", Group: "navarromed"},
-			{Name: "api", Group: "plena"},
+			{Name: "api", Group: "navarromed", Visibility: endpoint.VisibilityPublic},
+			{Name: "api", Group: "plena", Visibility: endpoint.VisibilityPublic},
+			{Name: "internal-db", Group: "navarromed", Visibility: endpoint.VisibilityPrivate},
 		},
 		Storage: &storage.Config{
 			MaximumNumberOfResults: storage.DefaultMaximumNumberOfResults,
@@ -35,12 +36,16 @@ func TestTenantFiltering(t *testing.T) {
 	}
 	watchdog.UpdateEndpointStatus(cfg.Endpoints[0], &endpoint.Result{Success: true, Duration: time.Millisecond, Timestamp: time.Now()})
 	watchdog.UpdateEndpointStatus(cfg.Endpoints[1], &endpoint.Result{Success: true, Duration: time.Millisecond, Timestamp: time.Now()})
+	watchdog.UpdateEndpointStatus(cfg.Endpoints[2], &endpoint.Result{Success: true, Duration: time.Millisecond, Timestamp: time.Now()})
 	router := New(cfg).Router()
 
-	t.Run("list-apex-shows-all-groups", func(t *testing.T) {
+	t.Run("list-apex-shows-all-groups-and-private-endpoints", func(t *testing.T) {
 		body := doGet(t, router, "/api/v1/endpoints/statuses", "status.nexfar.com.br")
 		if !strings.Contains(body, "navarromed_api") || !strings.Contains(body, "plena_api") {
 			t.Errorf("apex should list every group, got: %s", body)
+		}
+		if !strings.Contains(body, "navarromed_internal-db") {
+			t.Errorf("apex should list private endpoints, got: %s", body)
 		}
 	})
 
@@ -51,6 +56,13 @@ func TestTenantFiltering(t *testing.T) {
 		}
 		if strings.Contains(body, "plena_api") {
 			t.Errorf("tenant must not see another group, got: %s", body)
+		}
+	})
+
+	t.Run("list-tenant-hides-private-endpoints", func(t *testing.T) {
+		body := doGet(t, router, "/api/v1/endpoints/statuses", "navarromed.status.nexfar.com.br")
+		if strings.Contains(body, "navarromed_internal-db") {
+			t.Errorf("tenant must not see private endpoints of its own group, got: %s", body)
 		}
 	})
 
@@ -73,6 +85,9 @@ func TestTenantFiltering(t *testing.T) {
 		{name: "health-badge-own-group", path: "/api/v1/endpoints/navarromed_api/health/badge.svg", host: "navarromed.status.nexfar.com.br", expectedCode: http.StatusOK},
 		{name: "health-badge-other-group-denied", path: "/api/v1/endpoints/plena_api/health/badge.svg", host: "navarromed.status.nexfar.com.br", expectedCode: http.StatusNotFound},
 		{name: "uptime-raw-other-group-denied", path: "/api/v1/endpoints/plena_api/uptimes/24h", host: "navarromed.status.nexfar.com.br", expectedCode: http.StatusNotFound},
+		{name: "single-status-private-denied-for-tenant", path: "/api/v1/endpoints/navarromed_internal-db/statuses", host: "navarromed.status.nexfar.com.br", expectedCode: http.StatusNotFound},
+		{name: "single-status-private-apex-allowed", path: "/api/v1/endpoints/navarromed_internal-db/statuses", host: "status.nexfar.com.br", expectedCode: http.StatusOK},
+		{name: "health-badge-private-denied-for-tenant", path: "/api/v1/endpoints/navarromed_internal-db/health/badge.svg", host: "navarromed.status.nexfar.com.br", expectedCode: http.StatusNotFound},
 	}
 	for _, scenario := range scenarios {
 		t.Run(scenario.name, func(t *testing.T) {

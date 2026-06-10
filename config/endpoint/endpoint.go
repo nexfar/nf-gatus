@@ -88,6 +88,10 @@ type Endpoint struct {
 	// Group the endpoint is a part of. Used for grouping multiple endpoints together on the front end.
 	Group string `yaml:"group,omitempty"`
 
+	// Visibility determines whether the endpoint is displayed on tenant-scoped (subdomain)
+	// views of the dashboard. Defaults to private. See docs/multi-tenancy.md.
+	Visibility Visibility `yaml:"visibility,omitempty"`
+
 	// URL to send the request to
 	URL string `yaml:"url"`
 
@@ -193,6 +197,9 @@ func (e *Endpoint) Type() Type {
 // ValidateAndSetDefaults validates the endpoint's configuration and sets the default value of args that have one
 func (e *Endpoint) ValidateAndSetDefaults() error {
 	if err := validateEndpointNameGroupAndAlerts(e.Name, e.Group, e.Alerts); err != nil {
+		return err
+	}
+	if err := e.Visibility.ValidateAndSetDefault(); err != nil {
 		return err
 	}
 	if len(e.URL) == 0 {

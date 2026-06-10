@@ -31,6 +31,10 @@ type ExternalEndpoint struct {
 	// Group the endpoint is a part of. Used for grouping multiple endpoints together on the front end.
 	Group string `yaml:"group,omitempty"`
 
+	// Visibility determines whether the endpoint is displayed on tenant-scoped (subdomain)
+	// views of the dashboard. Defaults to private. See docs/multi-tenancy.md.
+	Visibility Visibility `yaml:"visibility,omitempty"`
+
 	// Token is the bearer token that must be provided through the Authorization header to push results to the endpoint
 	Token string `yaml:"token,omitempty"`
 
@@ -53,6 +57,9 @@ type ExternalEndpoint struct {
 // ValidateAndSetDefaults validates the ExternalEndpoint and sets the default values
 func (externalEndpoint *ExternalEndpoint) ValidateAndSetDefaults() error {
 	if err := validateEndpointNameGroupAndAlerts(externalEndpoint.Name, externalEndpoint.Group, externalEndpoint.Alerts); err != nil {
+		return err
+	}
+	if err := externalEndpoint.Visibility.ValidateAndSetDefault(); err != nil {
 		return err
 	}
 	if len(externalEndpoint.Token) == 0 {

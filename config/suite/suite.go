@@ -40,6 +40,10 @@ type Suite struct {
 	// Group the suite belongs to. Used for grouping multiple suites together.
 	Group string `yaml:"group,omitempty"`
 
+	// Visibility determines whether the suite is displayed on tenant-scoped (subdomain)
+	// views of the dashboard. Defaults to private. See docs/multi-tenancy.md.
+	Visibility endpoint.Visibility `yaml:"visibility,omitempty"`
+
 	// Enabled defines whether the suite is enabled
 	Enabled *bool `yaml:"enabled,omitempty"`
 
@@ -74,6 +78,9 @@ func (s *Suite) ValidateAndSetDefaults() error {
 	// Validate name
 	if len(s.Name) == 0 {
 		return ErrSuiteWithNoName
+	}
+	if err := s.Visibility.ValidateAndSetDefault(); err != nil {
+		return err
 	}
 	// Validate endpoints
 	if len(s.Endpoints) == 0 {

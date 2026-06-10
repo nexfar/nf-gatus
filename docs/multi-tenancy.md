@@ -16,6 +16,7 @@ endpoint key.
 
 - [How it works](#how-it-works)
 - [Configuration](#configuration)
+- [Endpoint visibility: public vs private](#endpoint-visibility-public-vs-private)
 - [Naming your groups](#naming-your-groups)
 - [Behavior reference](#behavior-reference)
 - [Security model](#security-model)
@@ -50,8 +51,52 @@ tenancy:
 |:--------------|:-------|:--------|:------------|
 | `root-domain` | string | `""`    | The apex domain the dashboard is served from, **without** any subdomain. When empty (or the `tenancy` section is omitted), multi-tenancy is disabled and every request sees every group. |
 
-That is the only setting. New tenants need **no config change** — just create endpoints
-whose group matches the desired subdomain (see below).
+That is the only `tenancy` setting. To expose an endpoint on a tenant's subdomain you
+need two things on the endpoint itself: a `group` matching the subdomain (see
+[Naming your groups](#naming-your-groups)) and `visibility: public` (see below).
+
+## Endpoint visibility: public vs private
+
+Belonging to a tenant's group is not enough to show up on the tenant's subdomain:
+each endpoint, external endpoint and suite also has a `visibility` field, and only
+the **public** ones are served on tenant-scoped views. This lets you keep internal
+checks (databases, queues, third-party dependencies, ...) in the same group as the
+customer-facing ones without overwhelming — or leaking information to — the customer.
+
+```yaml
+endpoints:
+  - name: api                      # customer-facing: shown on the tenant subdomain
+    group: navarromed
+    visibility: public
+    url: "https://api.navarromed.example.com/health"
+    conditions:
+      - "[STATUS] == 200"
+
+  - name: internal-db              # internal: apex/full view only
+    group: navarromed
+    url: "tcp://10.0.0.5:5432"
+    conditions:
+      - "[CONNECTED] == true"
+```
+
+| Value     | Effect |
+|:----------|:-------|
+| `private` | **Default.** Hidden from tenant subdomains; only visible on the apex/unscoped view. |
+| `public`  | Visible on the subdomain matching the endpoint's group (and on the apex). |
+
+Notes:
+
+- The default is **private on purpose**: forgetting to set `visibility` hides a check
+  from the customer instead of leaking an internal one. You opt endpoints *in*.
+- Visibility only matters when tenancy is enabled and the request comes from a tenant
+  subdomain. The apex domain, non-matching hosts, and deployments without a `tenancy`
+  section always see everything, regardless of `visibility`.
+- Like the group filter, visibility is enforced **server-side**: every tenant-scoped
+  route (status, badges, uptime, response times, charts) returns 404 for a private
+  key, so the data cannot be fetched from the raw API either.
+- For suites, `visibility` is set on the suite itself; statuses of remote instances
+  (the ALPHA `remote` feature) have no local config and are therefore never shown on
+  tenant subdomains.
 
 ## Naming your groups
 
@@ -93,8 +138,8 @@ With the config above:
 
 | Request host                              | Sees                       |
 |:------------------------------------------|:---------------------------|
-| `status.nexfar.com.br` (apex)             | All groups (full view)     |
-| `navarromed.status.nexfar.com.br`         | Only the `navarromed` group |
+| `status.nexfar.com.br` (apex)             | All groups (full view, including private endpoints) |
+| `navarromed.status.nexfar.com.br`         | Only the **public** endpoints/suites of the `navarromed` group |
 | `unknown.status.nexfar.com.br`            | Nothing (no group matches)  |
 | `localhost` / IP / any non-matching host  | All groups (full view)      |
 
@@ -116,6 +161,8 @@ With the config above:
   feature yet.
 - Endpoints **without a group** are only visible on the apex/unscoped view (their key
   has an empty group slug, which never matches a subdomain).
+- Endpoints whose `visibility` is `private` (the default) are also only visible on the
+  apex/unscoped view, even when their group matches the subdomain.
 
 ## DNS and TLS
 
