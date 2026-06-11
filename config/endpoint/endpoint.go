@@ -452,6 +452,25 @@ func (e *Endpoint) getParsedBody() string {
 			return string(b)
 		})
 	}
+	// [NOW_EPOCH], [NOW_EPOCH-900], [NOW_EPOCH+60] — unix seconds at request
+	// time, with an optional offset in seconds. Lets a static body express a
+	// sliding time window (e.g. Quickwit start_timestamp/end_timestamp).
+	nowEpochRegex, err := regexp.Compile(`\[NOW_EPOCH(?:([+-])(\d+))?\]`)
+	if err == nil {
+		body = nowEpochRegex.ReplaceAllStringFunc(body, func(match string) string {
+			groups := nowEpochRegex.FindStringSubmatch(match)
+			epoch := time.Now().Unix()
+			if groups[1] != "" {
+				offset, _ := strconv.ParseInt(groups[2], 10, 64)
+				if groups[1] == "-" {
+					epoch -= offset
+				} else {
+					epoch += offset
+				}
+			}
+			return strconv.FormatInt(epoch, 10)
+		})
+	}
 	return body
 }
 

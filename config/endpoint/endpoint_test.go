@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -1754,5 +1755,32 @@ func TestEndpoint_HideUIFeatures(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestEndpoint_getParsedBodyWithNowEpochPlaceholders(t *testing.T) {
+	endpoint := Endpoint{
+		Name: "quickwit-check",
+		Body: `{"start_timestamp": [NOW_EPOCH-900], "end_timestamp": [NOW_EPOCH], "future": [NOW_EPOCH+60]}`,
+	}
+	before := time.Now().Unix()
+	parsed := endpoint.getParsedBody()
+	after := time.Now().Unix()
+	var payload struct {
+		StartTimestamp int64 `json:"start_timestamp"`
+		EndTimestamp   int64 `json:"end_timestamp"`
+		Future         int64 `json:"future"`
+	}
+	if err := json.Unmarshal([]byte(parsed), &payload); err != nil {
+		t.Fatalf("expected parsed body to be valid JSON, got error '%v' for body: %s", err, parsed)
+	}
+	if payload.EndTimestamp < before || payload.EndTimestamp > after {
+		t.Errorf("expected end_timestamp between %d and %d, got %d", before, after, payload.EndTimestamp)
+	}
+	if payload.StartTimestamp != payload.EndTimestamp-900 {
+		t.Errorf("expected start_timestamp to be end_timestamp-900, got start=%d end=%d", payload.StartTimestamp, payload.EndTimestamp)
+	}
+	if payload.Future != payload.EndTimestamp+60 {
+		t.Errorf("expected future to be end_timestamp+60, got future=%d end=%d", payload.Future, payload.EndTimestamp)
 	}
 }
