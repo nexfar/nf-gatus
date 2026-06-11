@@ -33,7 +33,8 @@ Notes:
   punctuation replaced with `-`), and the group remains part of the key — so
   tenant scoping (see [multi-tenancy.md](multi-tenancy.md)) is unaffected.
 - When an endpoint with an `id` is renamed, the stored display name is synced
-  on the next result insert; history, events and uptime are preserved.
+  at startup and on configuration reload; history, events and uptime are
+  preserved.
 - Adding an `id` to an endpoint that already has history under its name-derived
   key behaves like a rename does upstream (the key changes once). Pick
   `id: <previous name>` to keep the existing key and history.

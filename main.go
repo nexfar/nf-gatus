@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/TwiN/gatus/v5/config"
+	"github.com/TwiN/gatus/v5/config/endpoint"
 	"github.com/TwiN/gatus/v5/controller"
 	"github.com/TwiN/gatus/v5/metrics"
 	"github.com/TwiN/gatus/v5/storage/store"
@@ -131,6 +132,17 @@ func initializeStorage(cfg *config.Config) {
 	numberOfEndpointStatusesDeleted := store.Get().DeleteAllEndpointStatusesNotInKeys(keys)
 	if numberOfEndpointStatusesDeleted > 0 {
 		logr.Infof("[main.initializeStorage] Deleted %d endpoint statuses because their matching endpoints no longer existed", numberOfEndpointStatusesDeleted)
+	}
+	// Sync the persisted display names of endpoints with an explicit id: they can be
+	// renamed without changing their key (see docs/endpoint-id.md), so their storage
+	// entry survives the rename and would otherwise keep the old name.
+	endpointsToSync := make([]*endpoint.Endpoint, 0, len(cfg.Endpoints)+len(cfg.ExternalEndpoints))
+	endpointsToSync = append(endpointsToSync, cfg.Endpoints...)
+	for _, ee := range cfg.ExternalEndpoints {
+		endpointsToSync = append(endpointsToSync, ee.ToEndpoint())
+	}
+	if err := store.Get().SyncEndpointDisplayNames(endpointsToSync); err != nil {
+		logr.Errorf("[main.initializeStorage] Failed to sync endpoint display names: %s", err.Error())
 	}
 	// Clean up the triggered alerts from the storage provider and load valid triggered endpoint alerts
 	numberOfPersistedTriggeredAlertsLoaded := 0

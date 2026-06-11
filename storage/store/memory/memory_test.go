@@ -1093,3 +1093,23 @@ func TestStore_ConcurrentAccess(t *testing.T) {
 		}
 	})
 }
+
+func TestStore_SyncEndpointDisplayNames(t *testing.T) {
+	store, _ := NewStore(storage.DefaultMaximumNumberOfResults, storage.DefaultMaximumNumberOfEvents)
+	ep := &endpoint.Endpoint{Name: "old-name", ID: "stable-id", Group: "group"}
+	store.InsertEndpointResult(ep, &testSuccessfulResult)
+	renamed := &endpoint.Endpoint{Name: "New Display Name", ID: "stable-id", Group: "group"}
+	if err := store.SyncEndpointDisplayNames([]*endpoint.Endpoint{renamed}); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	status, err := store.GetEndpointStatusByKey(renamed.Key(), paging.NewEndpointStatusParams().WithResults(1, 20))
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if status.Name != "New Display Name" {
+		t.Errorf("expected name to be synced to 'New Display Name', got %q", status.Name)
+	}
+	if status.Key != renamed.Key() {
+		t.Errorf("expected key %q, got %q", renamed.Key(), status.Key)
+	}
+}

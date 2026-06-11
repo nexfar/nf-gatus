@@ -203,9 +203,6 @@ func (s *Store) InsertEndpointResult(ep *endpoint.Endpoint, result *endpoint.Res
 			Type:      endpoint.EventStart,
 			Timestamp: time.Now(),
 		})
-	} else {
-		// Endpoints with an explicit id keep the same key when renamed — sync the name.
-		status.(*endpoint.Status).Name = ep.Name
 	}
 	AddResult(status.(*endpoint.Status), result, s.maximumNumberOfResults, s.maximumNumberOfEvents)
 	s.endpointCache.Set(endpointKey, status)
@@ -237,6 +234,24 @@ func (s *Store) InsertSuiteResult(su *suite.Suite, result *suite.Result) error {
 	}
 	s.suiteCache.Set(suiteKey, status)
 	logr.Debugf("[memory.InsertSuiteResult] Stored suite result for suiteKey=%s, total results=%d", suiteKey, len(status.Results))
+	return nil
+}
+
+// SyncEndpointDisplayNames updates the cached display name of the provided endpoints
+// when it differs from the configured one. Only endpoints with an explicit id are
+// considered, since they are the only ones whose key — and therefore cache entry —
+// survives a rename.
+func (s *Store) SyncEndpointDisplayNames(endpoints []*endpoint.Endpoint) error {
+	s.Lock()
+	defer s.Unlock()
+	for _, ep := range endpoints {
+		if len(ep.ID) == 0 {
+			continue
+		}
+		if status, exists := s.endpointCache.Get(ep.Key()); exists {
+			status.(*endpoint.Status).Name = ep.Name
+		}
+	}
 	return nil
 }
 

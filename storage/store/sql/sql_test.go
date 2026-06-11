@@ -942,3 +942,31 @@ func TestEventOrderingFix(t *testing.T) {
 	t.Logf("First event: %s at %v", events[0].Type, events[0].Timestamp)
 	t.Logf("Last event: %s at %v", events[len(events)-1].Type, events[len(events)-1].Timestamp)
 }
+
+func TestStore_SyncEndpointDisplayNames(t *testing.T) {
+	store, _ := NewStore("sqlite", t.TempDir()+"/TestStore_SyncEndpointDisplayNames.db", false, storage.DefaultMaximumNumberOfResults, storage.DefaultMaximumNumberOfEvents)
+	defer store.Close()
+	ep := &endpoint.Endpoint{Name: "old-name", ID: "stable-id", Group: "group"}
+	store.InsertEndpointResult(ep, &testSuccessfulResult)
+	renamed := &endpoint.Endpoint{Name: "New Display Name", ID: "stable-id", Group: "group"}
+	if err := store.SyncEndpointDisplayNames([]*endpoint.Endpoint{renamed}); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	status, err := store.GetEndpointStatusByKey(renamed.Key(), paging.NewEndpointStatusParams().WithResults(1, 20))
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if status.Name != "New Display Name" {
+		t.Errorf("expected name to be synced to 'New Display Name', got %q", status.Name)
+	}
+	if status.Key != renamed.Key() {
+		t.Errorf("expected key %q, got %q", renamed.Key(), status.Key)
+	}
+	if len(status.Results) != 1 {
+		t.Errorf("expected history to be preserved (1 result), got %d", len(status.Results))
+	}
+	// Endpoints without an explicit id are ignored
+	if err := store.SyncEndpointDisplayNames([]*endpoint.Endpoint{{Name: "whatever", Group: "group"}}); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+}

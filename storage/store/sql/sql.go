@@ -255,14 +255,6 @@ func (s *Store) InsertEndpointResult(ep *endpoint.Endpoint, result *endpoint.Res
 			logr.Errorf("[sql.InsertEndpointResult] Failed to retrieve id of endpoint with key=%s: %s", ep.Key(), err.Error())
 			return err
 		}
-	} else if len(ep.ID) > 0 {
-		// Endpoints with an explicit id keep the same key when renamed, so the row
-		// created on first insert must have its display name kept in sync.
-		if _, err := tx.Exec("UPDATE endpoints SET endpoint_name = $1 WHERE endpoint_id = $2 AND endpoint_name != $1", ep.Name, endpointID); err != nil {
-			_ = tx.Rollback()
-			logr.Errorf("[sql.InsertEndpointResult] Failed to sync name of endpoint with key=%s: %s", ep.Key(), err.Error())
-			return err
-		}
 	}
 	// First, we need to check if we need to insert a new event.
 	//
@@ -386,6 +378,27 @@ func (s *Store) InsertEndpointResult(ep *endpoint.Endpoint, result *endpoint.Res
 		_ = tx.Rollback()
 	}
 	return err
+}
+
+// SyncEndpointDisplayNames updates the persisted display name of the provided endpoints
+// when it differs from the configured one. Only endpoints with an explicit id are
+// considered, since they are the only ones whose key — and therefore row — survives a
+// rename. Stale names served by the write-through cache expire with its TTL.
+func (s *Store) SyncEndpointDisplayNames(endpoints []*endpoint.Endpoint) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	for _, ep := range endpoints {
+		if len(ep.ID) == 0 {
+			continue
+		}
+		if _, err := tx.Exec("UPDATE endpoints SET endpoint_name = $1 WHERE endpoint_key = $2 AND endpoint_name != $1", ep.Name, ep.Key()); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // DeleteAllEndpointStatusesNotInKeys removes all rows owned by an endpoint whose key is not within the keys provided

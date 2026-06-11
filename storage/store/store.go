@@ -52,6 +52,12 @@ type Store interface {
 	// Used to delete endpoints that have been persisted but are no longer part of the configured endpoints
 	DeleteAllEndpointStatusesNotInKeys(keys []string) int
 
+	// SyncEndpointDisplayNames updates the persisted display name of the provided endpoints
+	// when it differs from the configured one. Only endpoints with an explicit id are
+	// considered, since they are the only ones whose key — and therefore storage entry —
+	// survives a rename (see docs/endpoint-id.md).
+	SyncEndpointDisplayNames(endpoints []*endpoint.Endpoint) error
+
 	// DeleteAllSuiteStatusesNotInKeys removes all suite statuses that are not within the keys provided
 	DeleteAllSuiteStatusesNotInKeys(keys []string) int
 
