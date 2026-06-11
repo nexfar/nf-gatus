@@ -35,6 +35,10 @@ Notes:
 - When an endpoint with an `id` is renamed, the stored display name is synced
   at startup and on configuration reload; history, events and uptime are
   preserved.
+- Display names must remain unique within a group: the storage schema has a
+  unique constraint on (name, group). An endpoint whose configured name
+  duplicates another one in the same group keeps its previously stored name —
+  the sync logs a warning and skips it.
 - Adding an `id` to an endpoint that already has history under its name-derived
   key behaves like a rename does upstream (the key changes once). Pick
   `id: <previous name>` to keep the existing key and history.

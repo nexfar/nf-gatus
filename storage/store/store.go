@@ -55,7 +55,8 @@ type Store interface {
 	// SyncEndpointDisplayNames updates the persisted display name of the provided endpoints
 	// when it differs from the configured one. Only endpoints with an explicit id are
 	// considered, since they are the only ones whose key — and therefore storage entry —
-	// survives a rename (see docs/endpoint-id.md).
+	// survives a rename (see docs/endpoint-id.md). Endpoints that fail to sync
+	// individually (e.g. display name duplicated within the group) are logged and skipped.
 	SyncEndpointDisplayNames(endpoints []*endpoint.Endpoint) error
 
 	// DeleteAllSuiteStatusesNotInKeys removes all suite statuses that are not within the keys provided

@@ -970,3 +970,29 @@ func TestStore_SyncEndpointDisplayNames(t *testing.T) {
 		t.Fatalf("expected no error, got %v", err)
 	}
 }
+
+func TestStore_SyncEndpointDisplayNamesSkipsDuplicates(t *testing.T) {
+	store, _ := NewStore("sqlite", t.TempDir()+"/TestStore_SyncEndpointDisplayNamesSkipsDuplicates.db", false, storage.DefaultMaximumNumberOfResults, storage.DefaultMaximumNumberOfEvents)
+	defer store.Close()
+	first := &endpoint.Endpoint{Name: "Shared Name", ID: "first-id", Group: "group"}
+	second := &endpoint.Endpoint{Name: "second-old-name", ID: "second-id", Group: "group"}
+	third := &endpoint.Endpoint{Name: "third-old-name", ID: "third-id", Group: "group"}
+	store.InsertEndpointResult(first, &testSuccessfulResult)
+	store.InsertEndpointResult(second, &testSuccessfulResult)
+	store.InsertEndpointResult(third, &testSuccessfulResult)
+	// second's new name collides with first; third's rename is legitimate and must
+	// still be applied even though it is processed after the conflicting one.
+	secondRenamed := &endpoint.Endpoint{Name: "Shared Name", ID: "second-id", Group: "group"}
+	thirdRenamed := &endpoint.Endpoint{Name: "Third New Name", ID: "third-id", Group: "group"}
+	if err := store.SyncEndpointDisplayNames([]*endpoint.Endpoint{secondRenamed, thirdRenamed}); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	status, _ := store.GetEndpointStatusByKey(secondRenamed.Key(), paging.NewEndpointStatusParams())
+	if status.Name != "second-old-name" {
+		t.Errorf("expected conflicting rename to be skipped (name kept as 'second-old-name'), got %q", status.Name)
+	}
+	status, _ = store.GetEndpointStatusByKey(thirdRenamed.Key(), paging.NewEndpointStatusParams())
+	if status.Name != "Third New Name" {
+		t.Errorf("expected non-conflicting rename to be applied ('Third New Name'), got %q", status.Name)
+	}
+}

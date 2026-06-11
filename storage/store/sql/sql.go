@@ -383,22 +383,20 @@ func (s *Store) InsertEndpointResult(ep *endpoint.Endpoint, result *endpoint.Res
 // SyncEndpointDisplayNames updates the persisted display name of the provided endpoints
 // when it differs from the configured one. Only endpoints with an explicit id are
 // considered, since they are the only ones whose key — and therefore row — survives a
-// rename. Stale names served by the write-through cache expire with its TTL.
+// rename. Each endpoint is updated independently: a rename that violates the unique
+// constraint on (endpoint_name, endpoint_group) — i.e. a display name duplicated within
+// a group — is logged and skipped so it doesn't prevent the others from syncing.
+// Stale names served by the write-through cache expire with its TTL.
 func (s *Store) SyncEndpointDisplayNames(endpoints []*endpoint.Endpoint) error {
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
 	for _, ep := range endpoints {
 		if len(ep.ID) == 0 {
 			continue
 		}
-		if _, err := tx.Exec("UPDATE endpoints SET endpoint_name = $1 WHERE endpoint_key = $2 AND endpoint_name != $1", ep.Name, ep.Key()); err != nil {
-			_ = tx.Rollback()
-			return err
+		if _, err := s.db.Exec("UPDATE endpoints SET endpoint_name = $1 WHERE endpoint_key = $2 AND endpoint_name != $1", ep.Name, ep.Key()); err != nil {
+			logr.Warnf("[sql.SyncEndpointDisplayNames] Failed to sync display name of endpoint with key=%s to name=%q (likely duplicated within group=%q): %s", ep.Key(), ep.Name, ep.Group, err.Error())
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 
 // DeleteAllEndpointStatusesNotInKeys removes all rows owned by an endpoint whose key is not within the keys provided
