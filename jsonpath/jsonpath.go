@@ -40,7 +40,17 @@ func walk(path string, object interface{}) (string, int, error) {
 		keys = append(keys, path[startOfCurrentKey:])
 	}
 	currentKey := keys[0]
-	switch value := extractValue(currentKey, object).(type) {
+	extracted, exists := extractValue(currentKey, object)
+	if !exists {
+		return "", 0, fmt.Errorf("couldn't walk through '%s' because the key couldn't be found", currentKey)
+	}
+	switch value := extracted.(type) {
+	case nil:
+		// JSON null (e.g. a percentile aggregation over zero hits). Returning
+		// the literal "null" instead of an error lets numerical conditions
+		// resolve it to 0 rather than failing the check outright. Note that a
+		// missing key is still an error — see the exists check above.
+		return "null", 4, nil
 	case map[string]interface{}:
 		newPath := strings.Replace(path, fmt.Sprintf("%s.", currentKey), "", 1)
 		if path == newPath {
@@ -66,7 +76,10 @@ func walk(path string, object interface{}) (string, int, error) {
 	}
 }
 
-func extractValue(currentKey string, value interface{}) interface{} {
+// extractValue resolves currentKey against value. The second return value
+// distinguishes a key that couldn't be found (false) from a key that exists
+// but holds a JSON null (nil, true).
+func extractValue(currentKey string, value interface{}) (interface{}, bool) {
 	// Check if the current key ends with [#]
 	if strings.HasSuffix(currentKey, "]") && strings.Contains(currentKey, "[") {
 		var isNestedArray bool
@@ -88,7 +101,7 @@ func extractValue(currentKey string, value interface{}) interface{} {
 		}
 		arrayIndex, err := strconv.Atoi(index)
 		if err != nil {
-			return nil
+			return nil, false
 		}
 		currentKeyWithoutIndex := currentKey[:startOfBracket]
 		// if currentKeyWithoutIndex contains only an index (i.e. [0] or 0)
@@ -98,34 +111,36 @@ func extractValue(currentKey string, value interface{}) interface{} {
 				if isNestedArray {
 					return extractValue(currentKey[endOfBracket+1:], array[arrayIndex])
 				}
-				return array[arrayIndex]
+				return array[arrayIndex], true
 			}
-			return nil
+			return nil, false
 		}
-		if value == nil || value.(map[string]interface{})[currentKeyWithoutIndex] == nil {
-			return nil
+		valueAsMap, ok := value.(map[string]interface{})
+		if !ok || valueAsMap[currentKeyWithoutIndex] == nil {
+			return nil, false
 		}
 		// if currentKeyWithoutIndex contains both a key and an index (i.e. data[0])
-		array, _ := value.(map[string]interface{})[currentKeyWithoutIndex].([]interface{})
+		array, _ := valueAsMap[currentKeyWithoutIndex].([]interface{})
 		if len(array) > arrayIndex {
 			if isNestedArray {
 				return extractValue(currentKey[endOfBracket+1:], array[arrayIndex])
 			}
-			return array[arrayIndex]
+			return array[arrayIndex], true
 		}
-		return nil
+		return nil, false
 	}
 	if valueAsSlice, ok := value.([]interface{}); ok {
 		// If the type is a slice, return it
 		// This happens when the body (value) is a JSON array
-		return valueAsSlice
+		return valueAsSlice, true
 	}
 	if valueAsMap, ok := value.(map[string]interface{}); ok {
 		// If the value is a map, then we get the currentKey from that map
 		// This happens when the body (value) is a JSON object
-		return valueAsMap[currentKey]
+		extracted, exists := valueAsMap[currentKey]
+		return extracted, exists
 	}
 	// If the value is neither a map, nor a slice, nor an index, then we cannot retrieve the currentKey
 	// from said value. This usually happens when the body (value) is null.
-	return value
+	return value, value != nil
 }

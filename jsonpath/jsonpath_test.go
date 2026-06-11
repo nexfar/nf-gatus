@@ -174,6 +174,30 @@ func TestEval(t *testing.T) {
 			ExpectedOutputLength: 18,
 			ExpectedError:        false,
 		},
+		{
+			Name:                 "null-value",
+			Path:                 "value",
+			Data:                 `{"value": null}`,
+			ExpectedOutput:       "null",
+			ExpectedOutputLength: 4,
+			ExpectedError:        false,
+		},
+		{
+			Name:                 "null-value-in-array-of-objects",
+			Path:                 "aggregations.pct_time.values[0].value",
+			Data:                 `{"aggregations": {"pct_time": {"values": [{"key": 99.0, "value": null}]}}}`,
+			ExpectedOutput:       "null",
+			ExpectedOutputLength: 4,
+			ExpectedError:        false,
+		},
+		{
+			Name:                 "missing-key-is-still-an-error",
+			Path:                 "value",
+			Data:                 `{"other": 1}`,
+			ExpectedOutput:       "",
+			ExpectedOutputLength: 0,
+			ExpectedError:        true,
+		},
 	}
 	for _, scenario := range scenarios {
 		t.Run(scenario.Name, func(t *testing.T) {
