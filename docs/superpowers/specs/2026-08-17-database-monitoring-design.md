@@ -26,6 +26,8 @@ must be covered.
 
 - Native `postgres://` and `mongodb://` endpoint types, probed directly by Gatus.
 - Latency measured as a first-class, trustworthy signal.
+- A configurable representative read query per endpoint, whose latency *and*
+  result are both assertable.
 - Engine health exposed as a JSON body so thresholds are expressed as ordinary
   Gatus conditions in config, not as code.
 - Per-tenant scoping reusing the existing `group` + `tenancy.root-domain`
@@ -72,6 +74,20 @@ the optional probe query — exactly as SSH already uses `body:` to carry the co
 
 Defaults for the probe query when `body:` is empty: `SELECT 1` for Postgres,
 `{"ping": 1}` for MongoDB.
+
+The probe query's **result is exposed** under `probe` in the body, so a
+representative read query can be asserted on directly:
+
+```yaml
+  body: "SELECT count(*) FROM orders WHERE created_at > now() - interval '1 hour'"
+  conditions:
+    - "[RESPONSE_TIME] < 500"
+    - "[BODY].probe.value > 0"
+```
+
+`probe.value` is the first column of the first row; `probe.rows` is the row
+count. This is what makes a probe more than a liveness ping: the query runs
+against real tenant data and its answer is a condition.
 
 Because `body:` is used, probe queries inherit this fork's `[NOW_EPOCH±N]`
 placeholders for free, so a probe can express a sliding time window.
@@ -164,6 +180,7 @@ One round trip: a single `SELECT` of scalar subqueries against catalog views.
   "connect_ms": 12,
   "probe_ms": 3,
   "metrics_ms": 8,
+  "probe": { "rows": 1, "value": 1 },
   "version": "16.2",
   "in_recovery": false,
   "connections": { "used": 42, "max": 100, "used_pct": 42 },
@@ -241,6 +258,7 @@ Real MongoDB:
 ```json
 {
   "connect_ms": 20, "probe_ms": 2, "metrics_ms": 9,
+  "probe": { "ok": 1 },
   "backend": "mongodb", "version": "7.0.5",
   "is_writable_primary": true,
   "repl_set_state": "PRIMARY",
@@ -257,6 +275,7 @@ FerretDB — the same code, a thinner body:
 ```json
 {
   "connect_ms": 20, "probe_ms": 2, "metrics_ms": 4,
+  "probe": { "ok": 1 },
   "backend": "ferretdb", "version": "2.x",
   "uptime_seconds": 891234,
   "metrics_errors": [
