@@ -5,6 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -164,6 +167,47 @@ func collectPostgresMetrics(ctx context.Context, db *sql.DB, body *postgresBody)
 	body.BlockedSessions = &blockedSessions
 }
 
+// withPostgresConnectTimeout injects a connect_timeout query parameter derived
+// from timeout into dsn, unless the operator already set one.
+//
+// This is not redundant with the context passed to db.PingContext. lib/pq does
+// not implement driver.DriverContext, so database/sql wraps it in a
+// dsnConnector, whose Connect(_ context.Context) discards the context outright.
+// lib/pq therefore dials with its own connect_timeout setting, and its source
+// says of that setting: "Zero or not specified means wait indefinitely." The
+// consequence is that PingContext against a host that completes the TCP
+// handshake and then never answers blocks forever, past cfg.Timeout, holding a
+// watchdog concurrency slot (default 3) for the whole process and surviving
+// every configuration reload. The connect_timeout parameter is the only way to
+// bound it. Do not "simplify" this away.
+//
+// The DSN is always URL-form here: Endpoint.Type() only classifies an endpoint
+// as postgres for a postgres:// or postgresql:// prefix. A DSN that does not
+// parse is returned untouched, so that the driver reports the real syntax error
+// rather than something this function mangled.
+func withPostgresConnectTimeout(dsn string, timeout time.Duration) string {
+	parsed, err := url.Parse(dsn)
+	if err != nil {
+		return dsn
+	}
+	query := parsed.Query()
+	if query.Has("connect_timeout") {
+		// Never override an explicit operator choice, including an explicitly
+		// empty one.
+		return dsn
+	}
+	// lib/pq expects whole seconds, and rounding down would turn a sub-second
+	// timeout into 0, which means "wait indefinitely" - the exact bug this
+	// guards against. Round up, with a floor of one second.
+	seconds := int64(1)
+	if timeout > time.Second {
+		seconds = int64(math.Ceil(timeout.Seconds()))
+	}
+	query.Set("connect_timeout", strconv.FormatInt(seconds, 10))
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
+}
+
 // QueryPostgres connects to a PostgreSQL database, runs a probe query, and
 // optionally collects engine health metrics.
 //
@@ -180,7 +224,7 @@ func QueryPostgres(dsn, probeQuery string, collectMetrics bool, cfg *Config) (bo
 	probeQuery = defaultedProbeQuery(probeQuery, defaultPostgresProbeQuery)
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
 	defer cancel()
-	db, err := sql.Open("postgres", dsn)
+	db, err := sql.Open("postgres", withPostgresConnectTimeout(dsn, cfg.Timeout))
 	if err != nil {
 		return false, 0, nil, fmt.Errorf("failed to open postgres connection: %w", redactError(err))
 	}

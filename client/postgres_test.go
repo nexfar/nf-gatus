@@ -2,6 +2,7 @@ package client
 
 import (
 	"encoding/json"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -126,5 +127,93 @@ func TestPostgresBody_IncludesCollectedFields(t *testing.T) {
 	}
 	if !strings.Contains(got, `"longest_running_query_seconds":4.2`) {
 		t.Errorf("expected longest_running_query_seconds in body, got %s", got)
+	}
+}
+
+func TestWithPostgresConnectTimeout(t *testing.T) {
+	t.Parallel()
+	scenarios := []struct {
+		name     string
+		dsn      string
+		timeout  time.Duration
+		expected string
+	}{
+		{
+			name:     "injected-when-absent",
+			dsn:      "postgres://gatus:hunter2@db.internal:5432/tenant?sslmode=require",
+			timeout:  5 * time.Second,
+			expected: "postgres://gatus:hunter2@db.internal:5432/tenant?connect_timeout=5&sslmode=require",
+		},
+		{
+			name:     "injected-when-no-query-string-at-all",
+			dsn:      "postgres://db.internal:5432/tenant",
+			timeout:  5 * time.Second,
+			expected: "postgres://db.internal:5432/tenant?connect_timeout=5",
+		},
+		{
+			name:     "explicit-value-is-never-overridden",
+			dsn:      "postgres://db.internal:5432/tenant?connect_timeout=30",
+			timeout:  2 * time.Second,
+			expected: "postgres://db.internal:5432/tenant?connect_timeout=30",
+		},
+		{
+			name:     "explicit-empty-value-is-still-an-operator-choice",
+			dsn:      "postgres://db.internal:5432/tenant?connect_timeout=",
+			timeout:  2 * time.Second,
+			expected: "postgres://db.internal:5432/tenant?connect_timeout=",
+		},
+		{
+			name:     "rounds-up-to-the-next-whole-second",
+			dsn:      "postgresql://db.internal/tenant",
+			timeout:  2500 * time.Millisecond,
+			expected: "postgresql://db.internal/tenant?connect_timeout=3",
+		},
+		{
+			name:     "floors-at-one-second",
+			dsn:      "postgres://db.internal/tenant",
+			timeout:  10 * time.Millisecond,
+			expected: "postgres://db.internal/tenant?connect_timeout=1",
+		},
+		{
+			name:     "non-positive-timeout-also-floors-at-one-second",
+			dsn:      "postgres://db.internal/tenant",
+			timeout:  0,
+			expected: "postgres://db.internal/tenant?connect_timeout=1",
+		},
+		{
+			name:     "unparseable-dsn-is-returned-unchanged",
+			dsn:      "postgres://%zz",
+			timeout:  5 * time.Second,
+			expected: "postgres://%zz",
+		},
+	}
+	for _, scenario := range scenarios {
+		t.Run(scenario.name, func(t *testing.T) {
+			t.Parallel()
+			if got := withPostgresConnectTimeout(scenario.dsn, scenario.timeout); got != scenario.expected {
+				t.Errorf("withPostgresConnectTimeout(%q, %s) = %q, expected %q", scenario.dsn, scenario.timeout, got, scenario.expected)
+			}
+		})
+	}
+}
+
+func TestWithPostgresConnectTimeout_PreservesCredentialsAndDatabase(t *testing.T) {
+	t.Parallel()
+	got := withPostgresConnectTimeout("postgres://gatus:hunter2@db.internal:5432/tenant", 2*time.Second)
+	parsed, err := url.Parse(got)
+	if err != nil {
+		t.Fatalf("result is no longer parseable: %s", err)
+	}
+	if parsed.User.Username() != "gatus" {
+		t.Errorf("username was mangled, got %q", parsed.User.Username())
+	}
+	if password, _ := parsed.User.Password(); password != "hunter2" {
+		t.Errorf("password was mangled, got %q", password)
+	}
+	if parsed.Path != "/tenant" {
+		t.Errorf("database was mangled, got %q", parsed.Path)
+	}
+	if parsed.Query().Get("connect_timeout") != "2" {
+		t.Errorf("expected connect_timeout=2, got %q", parsed.Query().Get("connect_timeout"))
 	}
 }
