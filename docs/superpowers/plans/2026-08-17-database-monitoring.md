@@ -1033,9 +1033,12 @@ func TestMongoBody_FerretDBOmitsMongodInternals(t *testing.T) {
 		t.Fatalf("unexpected error: %s", err)
 	}
 	got := string(marshalled)
-	for _, absent := range []string{"connections", "global_lock_queue_total", "replication_lag_seconds", "repl_set_state"} {
+	// Assert on the quoted JSON key, not the bare word: MetricsErrors above
+	// contains the English word "connections" in its prose, which a bare
+	// substring check would match, failing the test for the wrong reason.
+	for _, absent := range []string{`"connections":`, `"global_lock_queue_total":`, `"replication_lag_seconds":`, `"repl_set_state":`} {
 		if strings.Contains(got, absent) {
-			t.Errorf("field %q must be omitted on a backend that cannot report it, got %s", absent, got)
+			t.Errorf("field %s must be omitted on a backend that cannot report it, got %s", absent, got)
 		}
 	}
 	if !strings.Contains(got, `"backend":"ferretdb"`) {
