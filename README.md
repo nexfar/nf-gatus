@@ -3241,8 +3241,8 @@ Placeholder `[STATUS]` as well as the fields `endpoints[].headers`,
 
 ### Monitoring a PostgreSQL database
 By prefixing `endpoints[].url` with `postgres://` or `postgresql://`, Gatus connects directly to a
-PostgreSQL database, runs a probe query, and — only if a condition references `[BODY]` — collects a
-snapshot of engine health metrics in the same round trip:
+PostgreSQL database, runs a probe query, and — only if a condition (or a `store:` mapping) references
+`[BODY]` — collects a snapshot of engine health metrics in the same round trip:
 ```yaml
 endpoints:
   - name: postgres
@@ -3254,7 +3254,9 @@ endpoints:
     conditions:
       - "[CONNECTED] == true"
       - "[RESPONSE_TIME] < 200"
+      - "has([BODY].connections) == true"
       - "[BODY].connections.used_pct < 80"
+      - "has([BODY].longest_running_query_seconds) == true"
       - "[BODY].longest_running_query_seconds < 60"
 ```
 `endpoints[].body`, when set, is the probe query run against the database (default: `SELECT 1`). Its
@@ -3269,6 +3271,16 @@ a representative read query can be asserted on, not just timed:
 `[RESPONSE_TIME]` covers connection establishment plus the probe query only; metric collection is
 excluded and reported separately as `[BODY].metrics_ms`.
 
+> ⚠️ **A bare `<`/`<=` condition against a field that can be absent (like
+> `connections` or `longest_running_query_seconds` above) passes silently, with
+> no marker anywhere on the dashboard, when that field was never collected.**
+> `>` and `==` fail visibly in the same situation — only `<`/`<=` are unsafe.
+> That is why every `<` condition above is paired with its own
+> `has([BODY]....) == true` list entry. See
+> [Database monitoring](docs/database-monitoring.md#-and--conditions-need-a-presence-guard)
+> for the full explanation; do not write an unguarded `<`/`<=` condition against
+> an optionally-absent field.
+
 Most metric fields require the `gatus_monitor` role to be a member of `pg_monitor`:
 ```sql
 CREATE ROLE gatus_monitor WITH LOGIN PASSWORD '...';
@@ -3277,10 +3289,22 @@ GRANT CONNECT ON DATABASE <tenant> TO gatus_monitor;
 ```
 Without `pg_monitor`, `connections`, `longest_running_query_seconds`,
 `longest_idle_in_transaction_seconds` and `blocked_sessions` are omitted from the body rather than
-reported as a wrong number — see [Database monitoring](docs/database-monitoring.md) for why.
+reported as a wrong number: several of them filter on `pg_stat_activity` columns that PostgreSQL NULLs
+for backends the role can't inspect, so without the grant they'd silently undercount instead of merely
+being unmeasured — see [Database monitoring](docs/database-monitoring.md#which-client-options-apply)
+for the full, and not yet live-verified, reasoning.
+
+Only `client.timeout` is honoured on a `postgres://` endpoint — the connection goes through `lib/pq`,
+not Gatus' HTTP client, so `insecure`, `tls.*`, `dns-resolver`, `proxy-url` and the rest have no effect.
+TLS is configured via the DSN itself (`?sslmode=require`, etc). `client.tunnel` and an `ssh:` block are
+**rejected at startup** rather than silently ignored — see
+[Database monitoring](docs/database-monitoring.md#which-client-options-apply).
 
 See [Database monitoring](docs/database-monitoring.md) for the full body schema, every field's
-semantics (including the `cache_hit_ratio_since_reset` caveat), and worked per-tenant examples.
+semantics (including the `cache_hit_pct_since_reset` caveat — note the field is a **percentage**,
+0..100, not a ratio), and worked per-tenant examples. **Nothing in this feature has been run against a
+real PostgreSQL, MongoDB or FerretDB server yet** — see
+[.examples/docker-compose-database-monitoring/README.md](.examples/docker-compose-database-monitoring/README.md).
 
 
 ### Monitoring a MongoDB or FerretDB database
@@ -3301,11 +3325,23 @@ endpoints:
       - "[CONNECTED] == true"
       - "[RESPONSE_TIME] < 200"
       - "[BODY].is_writable_primary == true"
+      - "has([BODY].connections) == true"
       - "[BODY].connections.used_pct < 80"
 ```
+As with PostgreSQL above, `[BODY].connections.used_pct < 80` on its own would silently pass if
+`connections` was never collected — pair every `<`/`<=` condition against an optionally-absent field
+with its own `has(...) == true` entry; see
+[Database monitoring](docs/database-monitoring.md#-and--conditions-need-a-presence-guard).
+
 `endpoints[].body`, when set, is the probe command document (default: `{"ping": 1}`), and its result is
-exposed as `[BODY].probe`:
+exposed as `[BODY].probe`. The probe command runs against the database named in the URL's path
+(`some_tenant` below), **not** against `admin` — get this wrong (or omit the path) and a command like
+`{"count": "orders"}` can still succeed while counting the wrong (or an empty) collection, with no error
+raised. The four diagnostic commands used for metrics always run against `admin` regardless of the URL's
+path — see [Database monitoring](docs/database-monitoring.md#the-probe-query-and-its-defaults) for the
+full explanation:
 ```yaml
+    url: "mongodb://gatus_monitor:${DB_MONITOR_PASSWORD}@navarromed-mongo.internal:27017/some_tenant?authSource=admin"
     body: '{"count": "orders"}'
     conditions:
       - "[RESPONSE_TIME] < 500"
@@ -3315,7 +3351,11 @@ exposed as `[BODY].probe`:
 excluded and reported separately as `[BODY].metrics_ms`. A malformed probe document is rejected at
 startup, not at check time.
 
-The monitoring user needs the `clusterMonitor` role. A FerretDB tenant's body is thin by design — it
+The monitoring user needs the `clusterMonitor` role. As with PostgreSQL, only `client.timeout` is
+honoured (TLS goes through the URI's `tls=`/`ssl=` params instead), and `client.tunnel`/`ssh:` are
+rejected at startup rather than silently ignored.
+
+A FerretDB tenant's body is thin by design — it
 has no `mongod` internals to report, since its connections, locks and replication live in the backing
 PostgreSQL (which can itself be monitored with the `postgres://` type above), and `metrics_errors`
 records why each field is absent:
