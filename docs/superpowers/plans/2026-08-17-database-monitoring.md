@@ -338,8 +338,11 @@ func QueryPostgres(dsn, probeQuery string, collectMetrics bool, cfg *Config) (bo
 		return false, 0, nil, fmt.Errorf("failed to open postgres connection: %w", redactError(err))
 	}
 	defer db.Close()
+	// One connection serves both the ping and the probe. The handle is closed
+	// per check (deferred above), so nothing pools across checks — capping idle
+	// connections at 0 would only force a redundant second dial mid-check and
+	// fold its handshake into probe_ms.
 	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(0)
 	start := time.Now()
 	if err := db.PingContext(ctx); err != nil {
 		return false, time.Since(start), nil, fmt.Errorf("failed to connect: %w", redactError(err))
