@@ -33,3 +33,11 @@ func redactError(err error) error {
 	}
 	return errors.New(redactCredentials(err.Error()))
 }
+
+// RedactCredentials is the exported form of redactCredentials, for callers
+// outside this package that surface an error containing a connection string.
+// config/endpoint uses it on url.Parse errors, whose message embeds the raw
+// input verbatim.
+func RedactCredentials(s string) string {
+	return redactCredentials(s)
+}

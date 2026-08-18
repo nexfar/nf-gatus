@@ -1862,3 +1862,122 @@ func TestEndpoint_ValidateAndSetDefaultsWithMongoProbeCommand(t *testing.T) {
 		})
 	}
 }
+
+// TestEndpoint_ValidateAndSetDefaultsWithDatabaseURLAndSSHBlock guards the
+// ordering of ValidateAndSetDefaults: the ssh: and dns: blocks return early, so
+// the database validation has to run before them or a database endpoint that
+// also carries one of those blocks silently skips every database check.
+func TestEndpoint_ValidateAndSetDefaultsWithDatabaseURLAndSSHBlock(t *testing.T) {
+	endpoint := &Endpoint{
+		Name:       "mongo-behind-a-bastion",
+		URL:        "mongodb://u:p@mongo.internal:27017/tenant",
+		Body:       "not json",
+		SSHConfig:  &ssh.Config{Username: "gatus", Password: "hunter2"},
+		Conditions: []Condition{"[CONNECTED] == true"},
+	}
+	if err := endpoint.ValidateAndSetDefaults(); !errors.Is(err, ErrEndpointWithInvalidProbeCommand) {
+		t.Errorf("expected the probe command to still be validated, got %v", err)
+	}
+	endpoint = &Endpoint{
+		Name:       "postgres-behind-a-bastion",
+		URL:        "postgres:///tenant",
+		SSHConfig:  &ssh.Config{Username: "gatus", Password: "hunter2"},
+		Conditions: []Condition{"[CONNECTED] == true"},
+	}
+	if err := endpoint.ValidateAndSetDefaults(); !errors.Is(err, ErrEndpointWithInvalidDatabaseURL) {
+		t.Errorf("expected the database url to still be validated, got %v", err)
+	}
+}
+
+// TestEndpoint_ValidateAndSetDefaultsRejectsUnsupportedDatabaseOptions covers
+// the options that a database endpoint accepts in YAML but that its client
+// cannot honour. Failing at boot beats silently not tunnelling.
+func TestEndpoint_ValidateAndSetDefaultsRejectsUnsupportedDatabaseOptions(t *testing.T) {
+	scenarios := []struct {
+		name        string
+		endpoint    *Endpoint
+		expectedErr error
+	}{
+		{
+			name: "postgres-with-a-tunnel",
+			endpoint: &Endpoint{
+				Name:         "postgres",
+				URL:          "postgres://u:p@db.internal:5432/tenant",
+				ClientConfig: &client.Config{Tunnel: "bastion"},
+				Conditions:   []Condition{"[CONNECTED] == true"},
+			},
+			expectedErr: ErrEndpointWithUnsupportedDatabaseOption,
+		},
+		{
+			name: "mongodb-with-a-tunnel",
+			endpoint: &Endpoint{
+				Name:         "mongo",
+				URL:          "mongodb://u:p@mongo.internal:27017/tenant",
+				ClientConfig: &client.Config{Tunnel: "bastion"},
+				Conditions:   []Condition{"[CONNECTED] == true"},
+			},
+			expectedErr: ErrEndpointWithUnsupportedDatabaseOption,
+		},
+		{
+			name: "mongodb-with-an-ssh-block",
+			endpoint: &Endpoint{
+				Name:       "mongo",
+				URL:        "mongodb://u:p@mongo.internal:27017/tenant",
+				SSHConfig:  &ssh.Config{Username: "gatus", Password: "hunter2"},
+				Conditions: []Condition{"[CONNECTED] == true"},
+			},
+			expectedErr: ErrEndpointWithUnsupportedDatabaseOption,
+		},
+		{
+			name: "postgres-without-either-option",
+			endpoint: &Endpoint{
+				Name:       "postgres",
+				URL:        "postgres://u:p@db.internal:5432/tenant",
+				Conditions: []Condition{"[CONNECTED] == true"},
+			},
+			expectedErr: nil,
+		},
+		{
+			name: "http-endpoint-with-a-tunnel-is-untouched",
+			endpoint: &Endpoint{
+				Name:         "http",
+				URL:          "https://example.com",
+				ClientConfig: &client.Config{Tunnel: "bastion"},
+				Conditions:   []Condition{"[STATUS] == 200"},
+			},
+			expectedErr: nil,
+		},
+	}
+	for _, scenario := range scenarios {
+		t.Run(scenario.name, func(t *testing.T) {
+			if err := scenario.endpoint.ValidateAndSetDefaults(); !errors.Is(err, scenario.expectedErr) {
+				t.Errorf("expected error %v, got %v", scenario.expectedErr, err)
+			}
+		})
+	}
+}
+
+// TestEndpoint_EvaluateHealthDoesNotLeakDSNInURLParseError covers the one path
+// on which a DSN reaches Result.Errors: url.Error.Error() embeds its raw input
+// verbatim, and Result.Errors is serialised to the API and rendered on the
+// dashboard.
+func TestEndpoint_EvaluateHealthDoesNotLeakDSNInURLParseError(t *testing.T) {
+	endpoint := &Endpoint{
+		Name:         "postgres",
+		URL:          "postgres://gatus:hunter2@db.internal:ab/cd/tenant",
+		Conditions:   []Condition{"[CONNECTED] == true"},
+		ClientConfig: client.GetDefaultConfig(),
+		UIConfig:     ui.GetDefaultConfig(),
+	}
+	result := endpoint.EvaluateHealth()
+	joined := strings.Join(result.Errors, "|")
+	if len(result.Errors) == 0 {
+		t.Fatal("expected the malformed dsn to produce an error")
+	}
+	if strings.Contains(joined, "hunter2") {
+		t.Errorf("Result.Errors leaked the password: %q", joined)
+	}
+	if strings.Contains(joined, "gatus:") {
+		t.Errorf("Result.Errors leaked the username: %q", joined)
+	}
+}

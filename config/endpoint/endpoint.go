@@ -75,6 +75,12 @@ var (
 	// ErrEndpointWithInvalidProbeCommand is the error with which Gatus will panic if a mongodb endpoint's body is not a valid command document
 	ErrEndpointWithInvalidProbeCommand = errors.New("the body of a mongodb:// endpoint must be a valid command document, e.g. {\"ping\": 1}")
 
+	// ErrEndpointWithUnsupportedDatabaseOption is the error with which Gatus will panic if a database endpoint is
+	// configured with an option that its client cannot honour. postgres:// and mongodb:// endpoints connect through
+	// their own database drivers rather than through client.GetHTTPClient, so an SSH tunnel is not applied. Failing
+	// at startup is the point: accepting the option would mean not tunnelling, silently, forever.
+	ErrEndpointWithUnsupportedDatabaseOption = errors.New("a postgres:// or mongodb:// endpoint does not support this option, because it connects through a database driver rather than through Gatus' HTTP client")
+
 	// ErrInvalidConditionFormat is the error with which Gatus will panic if a condition has an invalid format
 	ErrInvalidConditionFormat = errors.New("invalid condition format: does not match '<VALUE> <COMPARATOR> <VALUE>'")
 
@@ -266,15 +272,12 @@ func (e *Endpoint) ValidateAndSetDefaults() error {
 			return fmt.Errorf("%v: %w", ErrInvalidConditionFormat, err)
 		}
 	}
-	if e.DNSConfig != nil {
-		return e.DNSConfig.ValidateAndSetDefault()
-	}
-	if e.SSHConfig != nil {
-		return e.SSHConfig.Validate()
-	}
-	if e.Type() == TypeUNKNOWN {
-		return ErrUnknownEndpointType
-	}
+	// This block sits above the DNS and SSH early returns below on purpose. Both
+	// of those return outright, so a postgres:// or mongodb:// endpoint that also
+	// carries a dns: or ssh: block would otherwise skip every check here - and an
+	// ssh: block is exactly what an operator whose database sits behind a bastion
+	// reaches for, since the documentation presents it as a generic per-endpoint
+	// option.
 	if endpointType := e.Type(); endpointType == TypePostgres || endpointType == TypeMongoDB {
 		// url.Parse accepts "mongodb://" and "postgres:///tenant", which parse but
 		// cannot be connected to. Catch them at startup rather than every interval.
@@ -288,6 +291,27 @@ func (e *Endpoint) ValidateAndSetDefaults() error {
 				return fmt.Errorf("%w: %s", ErrEndpointWithInvalidProbeCommand, err)
 			}
 		}
+		// QueryPostgres and QueryMongoDB read only ClientConfig.Timeout: they dial
+		// through their own drivers, never through client.GetHTTPClient. Reject the
+		// options whose whole purpose is to change how the connection is made, so
+		// that a tunnel that will not be applied panics at boot rather than
+		// resolving to a direct connection to a host the operator believed was
+		// unreachable. (Adding real tunnel support is deliberately out of scope.)
+		if e.ClientConfig != nil && len(e.ClientConfig.Tunnel) > 0 {
+			return fmt.Errorf("%w: client.tunnel", ErrEndpointWithUnsupportedDatabaseOption)
+		}
+		if e.SSHConfig != nil {
+			return fmt.Errorf("%w: ssh", ErrEndpointWithUnsupportedDatabaseOption)
+		}
+	}
+	if e.DNSConfig != nil {
+		return e.DNSConfig.ValidateAndSetDefault()
+	}
+	if e.SSHConfig != nil {
+		return e.SSHConfig.Validate()
+	}
+	if e.Type() == TypeUNKNOWN {
+		return ErrUnknownEndpointType
 	}
 	for _, maintenanceWindow := range e.MaintenanceWindows {
 		if err := maintenanceWindow.ValidateAndSetDefaults(); err != nil {
@@ -351,7 +375,11 @@ func (e *Endpoint) EvaluateHealthWithContext(context *gontext.Gontext) *Result {
 	} else {
 		urlObject, err := url.Parse(processedEndpoint.URL)
 		if err != nil {
-			result.AddError(err.Error())
+			// url.Error.Error() embeds the raw input verbatim, e.g.
+			// parse "postgres://user:ab/cd@host/db": invalid port ":ab" after host.
+			// Result.Errors is serialised to the API and rendered on the dashboard,
+			// so a database DSN would surface its password there.
+			result.AddError(client.RedactCredentials(err.Error()))
 		} else {
 			result.Hostname = urlObject.Hostname()
 			result.port = urlObject.Port()
