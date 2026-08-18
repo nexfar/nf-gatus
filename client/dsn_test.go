@@ -33,6 +33,21 @@ func TestRedactCredentials(t *testing.T) {
 			expected: `postgres://***:***@db.internal:5432/tenant`,
 		},
 		{
+			name:     "empty-username-with-password",
+			input:    `dial error: postgres://:s3cret@db.internal:5432/tenant`,
+			expected: `dial error: postgres://***:***@db.internal:5432/tenant`,
+		},
+		{
+			name:     "password-containing-an-unencoded-at-sign",
+			input:    `error parsing uri: mongodb+srv://user:p@ss@cluster.example.net/tenant`,
+			expected: `error parsing uri: mongodb+srv://***:***@cluster.example.net/tenant`,
+		},
+		{
+			name:     "at-sign-after-a-path-separator-is-not-userinfo",
+			input:    `failed to fetch https://example.com/path@thing`,
+			expected: `failed to fetch https://example.com/path@thing`,
+		},
+		{
 			name:     "no-credentials-left-untouched",
 			input:    `connection refused to db.internal:5432`,
 			expected: `connection refused to db.internal:5432`,

@@ -193,3 +193,114 @@ func TestDetectMongoBackend(t *testing.T) {
 		t.Errorf("expected ferretdb from the version string, got %q", got)
 	}
 }
+
+func TestApplyMongoReplSetStatus(t *testing.T) {
+	t.Parallel()
+	primaryOptime := bson.NewDateTimeFromTime(time.Unix(1000, 0))
+	secondaryOptime := bson.NewDateTimeFromTime(time.Unix(995, 0))
+	scenarios := []struct {
+		name              string
+		status            bson.M
+		expectedState     string
+		expectedLag       *float64
+		expectedErrSubstr string
+	}{
+		{
+			name: "primary-and-self-present",
+			status: bson.M{
+				"myState": int32(2),
+				"members": bson.A{
+					bson.M{"stateStr": "PRIMARY", "optimeDate": primaryOptime},
+					bson.M{"self": true, "stateStr": "SECONDARY", "optimeDate": secondaryOptime},
+				},
+			},
+			expectedState: "SECONDARY",
+			expectedLag:   float64Pointer(5),
+		},
+		{
+			name: "no-primary-explains-the-omission",
+			status: bson.M{
+				"myState": int32(2),
+				"members": bson.A{
+					bson.M{"self": true, "stateStr": "SECONDARY", "optimeDate": secondaryOptime},
+					bson.M{"stateStr": "SECONDARY", "optimeDate": secondaryOptime},
+				},
+			},
+			expectedState:     "SECONDARY",
+			expectedErrSubstr: "no member reports stateStr PRIMARY",
+		},
+		{
+			name: "no-self-explains-the-omission",
+			status: bson.M{
+				"myState": int32(1),
+				"members": bson.A{
+					bson.M{"stateStr": "PRIMARY", "optimeDate": primaryOptime},
+				},
+			},
+			expectedState:     "PRIMARY",
+			expectedErrSubstr: "no member is flagged as self",
+		},
+		{
+			name:              "no-members-array-explains-the-omission",
+			status:            bson.M{"myState": int32(1)},
+			expectedState:     "PRIMARY",
+			expectedErrSubstr: "reported no members array",
+		},
+		{
+			name:              "unrecognised-state-code-explains-the-omission",
+			status:            bson.M{"myState": int32(99)},
+			expectedErrSubstr: "unrecognised myState value",
+		},
+		{
+			name:              "fatal-state-code-is-mapped",
+			status:            bson.M{"myState": int32(4), "members": bson.A{}},
+			expectedState:     "FATAL",
+			expectedErrSubstr: "no member reports stateStr PRIMARY",
+		},
+	}
+	for _, scenario := range scenarios {
+		t.Run(scenario.name, func(t *testing.T) {
+			t.Parallel()
+			var body mongoBody
+			applyMongoReplSetStatus(scenario.status, &body)
+			if body.ReplSetState != scenario.expectedState {
+				t.Errorf("expected repl_set_state %q, got %q", scenario.expectedState, body.ReplSetState)
+			}
+			if scenario.expectedLag == nil {
+				if body.ReplicationLagSeconds != nil {
+					t.Errorf("expected replication_lag_seconds to be absent, got %v", *body.ReplicationLagSeconds)
+				}
+			} else if body.ReplicationLagSeconds == nil {
+				t.Error("expected replication_lag_seconds to be present")
+			} else if *body.ReplicationLagSeconds != *scenario.expectedLag {
+				t.Errorf("expected replication_lag_seconds %v, got %v", *scenario.expectedLag, *body.ReplicationLagSeconds)
+			}
+			if len(scenario.expectedErrSubstr) > 0 {
+				if !strings.Contains(strings.Join(body.MetricsErrors, "|"), scenario.expectedErrSubstr) {
+					t.Errorf("expected metrics_errors to mention %q, got %v", scenario.expectedErrSubstr, body.MetricsErrors)
+				}
+			} else if len(body.MetricsErrors) > 0 {
+				t.Errorf("expected no metrics_errors, got %v", body.MetricsErrors)
+			}
+		})
+	}
+}
+
+func TestReplSetStateName(t *testing.T) {
+	t.Parallel()
+	// State 4 (FATAL) is easy to miss because it is absent from some
+	// documentation tables; an unmapped code must not silently vanish.
+	if name, ok := replSetStateName(int32(4)); !ok || name != "FATAL" {
+		t.Errorf("expected state 4 to map to FATAL, got %q (ok=%v)", name, ok)
+	}
+	if _, ok := replSetStateName(int32(42)); ok {
+		t.Error("expected an unknown state code to report ok=false")
+	}
+	if _, ok := replSetStateName("PRIMARY"); ok {
+		t.Error("expected a non-numeric state to report ok=false")
+	}
+}
+
+func float64Pointer(v float64) *float64 {
+	return &v
+}

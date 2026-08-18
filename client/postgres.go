@@ -261,7 +261,7 @@ func QueryPostgres(dsn, probeQuery string, collectMetrics bool, cfg *Config) (bo
 	body.MetricsMS = float64(time.Since(metricsStart).Microseconds()) / 1000
 	marshalled, err := json.Marshal(body)
 	if err != nil {
-		return true, duration, nil, fmt.Errorf("failed to marshal body: %w", err)
+		return true, duration, nil, fmt.Errorf("failed to marshal body: %w", redactError(err))
 	}
 	return true, duration, marshalled, nil
 }

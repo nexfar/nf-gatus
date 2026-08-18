@@ -128,7 +128,7 @@ func QueryMongoDB(uri, probeCommand string, collectMetrics bool, cfg *Config) (b
 	body.MetricsMS = float64(time.Since(metricsStart).Microseconds()) / 1000
 	marshalled, err := json.Marshal(body)
 	if err != nil {
-		return true, duration, nil, fmt.Errorf("failed to marshal body: %w", err)
+		return true, duration, nil, fmt.Errorf("failed to marshal body: %w", redactError(err))
 	}
 	return true, duration, marshalled, nil
 }
@@ -229,13 +229,30 @@ func collectMongoReplicationLag(ctx context.Context, admin *mongo.Database, body
 		body.MetricsErrors = append(body.MetricsErrors, "replSetGetStatus: not supported by this backend or not a replica set member")
 		return
 	}
+	applyMongoReplSetStatus(status, body)
+}
+
+// applyMongoReplSetStatus maps a decoded replSetGetStatus document onto body. It
+// is separate from the command round trip so that every omission path can be
+// tested without a server.
+//
+// Every path that leaves ReplicationLagSeconds or ReplSetState absent records
+// why. A "<" condition passes silently on a missing field, so an unexplained
+// omission renders "replication_lag_seconds < 10" green during exactly the
+// incident - an election with no PRIMARY - that the condition exists to catch.
+func applyMongoReplSetStatus(status bson.M, body *mongoBody) {
 	if state, ok := status["myState"]; ok {
 		if stateStr, ok := replSetStateName(state); ok {
 			body.ReplSetState = stateStr
+		} else {
+			body.MetricsErrors = append(body.MetricsErrors,
+				fmt.Sprintf("repl_set_state omitted: replSetGetStatus reported an unrecognised myState value (%v)", state))
 		}
 	}
 	members, ok := status["members"].(bson.A)
 	if !ok {
+		body.MetricsErrors = append(body.MetricsErrors,
+			"replication_lag_seconds omitted: replSetGetStatus reported no members array")
 		return
 	}
 	var selfOptime, primaryOptime time.Time
@@ -256,6 +273,14 @@ func collectMongoReplicationLag(ctx context.Context, admin *mongo.Database, body
 			primaryOptime, havePrimary = optime.Time(), true
 		}
 	}
+	if !havePrimary {
+		body.MetricsErrors = append(body.MetricsErrors,
+			"replication_lag_seconds omitted: no member reports stateStr PRIMARY, so there is no reference optime (an election may be in progress)")
+	}
+	if !haveSelf {
+		body.MetricsErrors = append(body.MetricsErrors,
+			"replication_lag_seconds omitted: no member is flagged as self, so this member's optime is unknown")
+	}
 	if haveSelf && havePrimary {
 		lag := primaryOptime.Sub(selfOptime).Seconds()
 		if lag < 0 {
@@ -273,7 +298,7 @@ func replSetStateName(state any) (string, bool) {
 	}
 	names := map[int64]string{
 		0: "STARTUP", 1: "PRIMARY", 2: "SECONDARY", 3: "RECOVERING",
-		5: "STARTUP2", 6: "UNKNOWN", 7: "ARBITER", 8: "DOWN",
+		4: "FATAL", 5: "STARTUP2", 6: "UNKNOWN", 7: "ARBITER", 8: "DOWN",
 		9: "ROLLBACK", 10: "REMOVED",
 	}
 	name, ok := names[code]
