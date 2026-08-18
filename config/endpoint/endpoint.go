@@ -69,6 +69,12 @@ var (
 	// ErrUnknownEndpointType is the error with which Gatus will panic if an endpoint has an unknown type
 	ErrUnknownEndpointType = errors.New("unknown endpoint type")
 
+	// ErrEndpointWithInvalidDatabaseURL is the error with which Gatus will panic if a database endpoint's URL is not a usable connection string
+	ErrEndpointWithInvalidDatabaseURL = errors.New("a postgres:// or mongodb:// endpoint must have a host in its url")
+
+	// ErrEndpointWithInvalidProbeCommand is the error with which Gatus will panic if a mongodb endpoint's body is not a valid command document
+	ErrEndpointWithInvalidProbeCommand = errors.New("the body of a mongodb:// endpoint must be a valid command document, e.g. {\"ping\": 1}")
+
 	// ErrInvalidConditionFormat is the error with which Gatus will panic if a condition has an invalid format
 	ErrInvalidConditionFormat = errors.New("invalid condition format: does not match '<VALUE> <COMPARATOR> <VALUE>'")
 
@@ -268,6 +274,20 @@ func (e *Endpoint) ValidateAndSetDefaults() error {
 	}
 	if e.Type() == TypeUNKNOWN {
 		return ErrUnknownEndpointType
+	}
+	if endpointType := e.Type(); endpointType == TypePostgres || endpointType == TypeMongoDB {
+		// url.Parse accepts "mongodb://" and "postgres:///tenant", which parse but
+		// cannot be connected to. Catch them at startup rather than every interval.
+		if parsedURL, err := url.Parse(e.URL); err != nil || len(parsedURL.Host) == 0 {
+			return ErrEndpointWithInvalidDatabaseURL
+		}
+		if endpointType == TypeMongoDB {
+			// A malformed command document fails before any connection is attempted,
+			// so at runtime it is indistinguishable from a real outage. Reject it here.
+			if err := client.ValidateMongoProbeCommand(e.getParsedBody()); err != nil {
+				return fmt.Errorf("%w: %s", ErrEndpointWithInvalidProbeCommand, err)
+			}
+		}
 	}
 	for _, maintenanceWindow := range e.MaintenanceWindows {
 		if err := maintenanceWindow.ValidateAndSetDefaults(); err != nil {

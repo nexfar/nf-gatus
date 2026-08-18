@@ -64,6 +64,14 @@ func parseMongoProbeCommand(body string) (bson.D, error) {
 	return command, nil
 }
 
+// ValidateMongoProbeCommand reports whether body is a usable probe command
+// document. It exists so that config validation rejects a malformed document at
+// startup instead of letting every check report a false outage forever.
+func ValidateMongoProbeCommand(body string) error {
+	_, err := parseMongoProbeCommand(body)
+	return err
+}
+
 // QueryMongoDB connects to a MongoDB-compatible server, runs a probe command,
 // and optionally collects engine health metrics.
 //

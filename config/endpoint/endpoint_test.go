@@ -1808,3 +1808,57 @@ func TestEndpoint_getParsedBodyWithNowEpochPlaceholders(t *testing.T) {
 		t.Errorf("expected future to be end_timestamp+60, got future=%d end=%d", payload.Future, payload.EndTimestamp)
 	}
 }
+
+func TestEndpoint_ValidateAndSetDefaultsWithDatabaseURL(t *testing.T) {
+	scenarios := []struct {
+		name        string
+		url         string
+		expectedErr error
+	}{
+		{name: "postgres-without-host", url: "postgres:///tenant", expectedErr: ErrEndpointWithInvalidDatabaseURL},
+		{name: "mongodb-without-host", url: "mongodb://", expectedErr: ErrEndpointWithInvalidDatabaseURL},
+		{name: "valid-postgres", url: "postgres://u:p@db.internal:5432/tenant", expectedErr: nil},
+		{name: "valid-mongodb", url: "mongodb://u:p@mongo.internal:27017/tenant", expectedErr: nil},
+		{name: "valid-mongodb-srv", url: "mongodb+srv://u:p@cluster.example.net/tenant", expectedErr: nil},
+	}
+	for _, scenario := range scenarios {
+		t.Run(scenario.name, func(t *testing.T) {
+			endpoint := &Endpoint{
+				Name:       "database",
+				URL:        scenario.url,
+				Conditions: []Condition{"[CONNECTED] == true"},
+			}
+			err := endpoint.ValidateAndSetDefaults()
+			if !errors.Is(err, scenario.expectedErr) {
+				t.Errorf("expected error %v, got %v", scenario.expectedErr, err)
+			}
+		})
+	}
+}
+
+func TestEndpoint_ValidateAndSetDefaultsWithMongoProbeCommand(t *testing.T) {
+	scenarios := []struct {
+		name        string
+		body        string
+		expectedErr error
+	}{
+		{name: "empty-body-uses-default", body: "", expectedErr: nil},
+		{name: "valid-command-document", body: `{"dbStats": 1}`, expectedErr: nil},
+		{name: "not-json", body: "not json", expectedErr: ErrEndpointWithInvalidProbeCommand},
+		{name: "empty-document", body: "{}", expectedErr: ErrEndpointWithInvalidProbeCommand},
+	}
+	for _, scenario := range scenarios {
+		t.Run(scenario.name, func(t *testing.T) {
+			endpoint := &Endpoint{
+				Name:       "mongo",
+				URL:        "mongodb://u:p@mongo.internal:27017/tenant",
+				Body:       scenario.body,
+				Conditions: []Condition{"[CONNECTED] == true"},
+			}
+			err := endpoint.ValidateAndSetDefaults()
+			if !errors.Is(err, scenario.expectedErr) {
+				t.Errorf("expected error %v, got %v", scenario.expectedErr, err)
+			}
+		})
+	}
+}
