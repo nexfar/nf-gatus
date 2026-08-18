@@ -6,6 +6,27 @@ against real servers: a PostgreSQL instance, a real MongoDB instance, and a Ferr
 queries and command shapes that the unit tests cannot — they are skipped by default and only run
 when you point them at a live server with the environment variables below.
 
+> ⚠️ **As of this writing, nobody has actually run this stack.** The `postgres://` and `mongodb://`
+> endpoint types, and everything [`docs/database-monitoring.md`](../../docs/database-monitoring.md)
+> says about their body shapes, are reasoned from driver/protocol documentation and unit-tested
+> against fabricated responses — not observed against a live PostgreSQL, MongoDB or FerretDB. The
+> FerretDB body shape in particular is a documented *prediction*. Running the steps below for the
+> first time is expected to surface surprises; please update the docs (and the code, if needed) with
+> what you find rather than assuming the current text is already correct.
+
+> ⚠️ **The `mongodb` service here is a standalone `mongo:7`, not a replica set.** `replSetGetStatus`
+> always fails against it, so `[BODY].repl_set_state` and `[BODY].replication_lag_seconds` are always
+> absent when you point a check at this container — `TestQueryMongoDB_Integration` and any manual
+> check against `GATUS_TEST_MONGODB_URI` will never exercise the replication-lag code path. The
+> flagship example in `docs/database-monitoring.md` and the README (a `mongodb://` endpoint with
+> `?replicaSet=rs0` asserting `[BODY].replication_lag_seconds < 10`) **cannot be validated by this
+> stack** — and per the presence-guard trap documented there, an unguarded `< 10` condition against a
+> field this stack never populates would silently *pass* rather than error, which is exactly the kind
+> of false confidence that trap produces. Guard that condition with
+> `has([BODY].replication_lag_seconds) == true` if you test it here, and expect that guard to fail
+> (correctly) against this standalone instance. This stack is intentionally not converted to a
+> replica set — do the replica-set-specific verification against a real replica set instead.
+
 ### 1. Start the stack
 
 From the repository root:

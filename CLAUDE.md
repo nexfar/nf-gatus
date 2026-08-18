@@ -20,7 +20,7 @@ This is **nf-gatus**, Nexfar's fork of [TwiN/gatus](https://github.com/TwiN/gatu
 | Build the Vue frontend (**required after any `web/app/` change**) | `make frontend-build` |
 | Frontend dev server | `make frontend-dev` |
 
-After changing Go dependencies: `go mod tidy && go mod vendor` (the `vendor/` directory is committed).
+After changing Go dependencies: `go mod tidy` (there is no `vendor/` directory in this repo — do not run `go mod vendor`).
 
 ## Architecture: the monitoring data flow
 
