@@ -541,20 +541,24 @@ type postgresConnections struct {
 Add these fields to `postgresBody`, between `Probe` and `MetricsErrors`:
 
 ```go
-	Version    string `json:"version,omitempty"`
-	InRecovery bool   `json:"in_recovery"`
+	Version string `json:"version,omitempty"`
 
-	// The four fields below require pg_monitor membership. They are pointers so
-	// that they are omitted entirely when that grant is missing, rather than
-	// reported as a silently wrong zero.
+	// Every field below is a pointer so that it is omitted entirely when it
+	// could not be collected, rather than reported as a silently wrong zero.
+	// InRecovery in particular must be a *bool: a plain bool with omitempty
+	// would drop a legitimate false.
+	//
+	// The first four additionally require pg_monitor membership; the rest are
+	// absent only when the metrics query fails as a whole.
 	Connections                     *postgresConnections `json:"connections,omitempty"`
 	LongestRunningQuerySeconds      *float64             `json:"longest_running_query_seconds,omitempty"`
 	LongestIdleInTransactionSeconds *float64             `json:"longest_idle_in_transaction_seconds,omitempty"`
 	BlockedSessions                 *int64               `json:"blocked_sessions,omitempty"`
 
-	ReplicationLagSeconds float64 `json:"replication_lag_seconds"`
-	CacheHitRatio         float64 `json:"cache_hit_ratio"`
-	DatabaseSizeBytes     int64   `json:"database_size_bytes"`
+	InRecovery              *bool    `json:"in_recovery,omitempty"`
+	ReplicationLagSeconds   *float64 `json:"replication_lag_seconds,omitempty"`
+	CacheHitRatioSinceReset *float64 `json:"cache_hit_ratio_since_reset,omitempty"`
+	DatabaseSizeBytes       *int64   `json:"database_size_bytes,omitempty"`
 ```
 
 Then add the collector:
@@ -586,7 +590,7 @@ SELECT
        THEN COALESCE(extract(epoch FROM now() - pg_last_xact_replay_timestamp()), 0)
        ELSE 0 END                                                         AS replication_lag_seconds,
   COALESCE((SELECT sum(blks_hit)::float8 / NULLIF(sum(blks_hit) + sum(blks_read), 0)
-            FROM pg_stat_database), 0)                                    AS cache_hit_ratio,
+            FROM pg_stat_database), 0)                                    AS cache_hit_ratio_since_reset,
   pg_database_size(current_database())                                    AS database_size_bytes`
 
 // collectPostgresMetrics fills the engine health fields of body.

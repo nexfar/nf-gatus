@@ -171,6 +171,17 @@ condition on a cumulative counter (`deadlocks`, `xact_rollback`, Mongo's
 `opcounters`) has no previous value to diff against and is meaningless. Such fields
 are deliberately excluded.
 
+One documented exception: `cache_hit_ratio_since_reset` derives from `blks_hit` /
+`blks_read`, which accumulate since the last statistics reset. It is a cumulative
+average, not a current rate — on a long-lived instance a recent regression barely
+moves it. The field carries `_since_reset` in its name precisely so that nobody
+writes a threshold against it expecting a live gauge. Every other field is
+instantaneous.
+
+Fields are pointers in the implementation so that an uncollectable value is
+omitted rather than marshalled as a zero — including `in_recovery`, where a plain
+`bool` would make a legitimate `false` indistinguishable from "never measured".
+
 ### 5.1 PostgreSQL
 
 One round trip: a single `SELECT` of scalar subqueries against catalog views.
@@ -188,7 +199,7 @@ One round trip: a single `SELECT` of scalar subqueries against catalog views.
   "longest_idle_in_transaction_seconds": 0,
   "blocked_sessions": 0,
   "replication_lag_seconds": 0,
-  "cache_hit_ratio": 0.997,
+  "cache_hit_ratio_since_reset": 0.997,
   "database_size_bytes": 1234567
 }
 ```
@@ -213,7 +224,7 @@ SELECT
        THEN COALESCE(extract(epoch FROM now() - pg_last_xact_replay_timestamp()), 0)
        ELSE 0 END                                                     AS replication_lag_seconds,
   COALESCE((SELECT sum(blks_hit)::float8 / NULLIF(sum(blks_hit) + sum(blks_read), 0)
-            FROM pg_stat_database), 0)                                AS cache_hit_ratio,
+            FROM pg_stat_database), 0)                                AS cache_hit_ratio_since_reset,
   pg_database_size(current_database())                                AS database_size_bytes;
 ```
 
