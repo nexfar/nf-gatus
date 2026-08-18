@@ -425,6 +425,18 @@ func TestEndpoint_Type(t *testing.T) {
 		},
 		{
 			args: args{
+				URL: "postgres://user:pw@db.internal:5432/tenant",
+			},
+			want: TypePostgres,
+		},
+		{
+			args: args{
+				URL: "postgresql://db.internal/tenant",
+			},
+			want: TypePostgres,
+		},
+		{
+			args: args{
 				URL: "invalid://example.org",
 			},
 			want: TypeUNKNOWN,

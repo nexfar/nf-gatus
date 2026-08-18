@@ -54,6 +54,7 @@ const (
 	TypeGRPC     Type = "GRPC"
 	TypeWS       Type = "WEBSOCKET"
 	TypeSSH      Type = "SSH"
+	TypePostgres Type = "POSTGRES"
 	TypeUNKNOWN  Type = "UNKNOWN"
 )
 
@@ -195,6 +196,8 @@ func (e *Endpoint) Type() Type {
 		return TypeWS
 	case strings.HasPrefix(e.URL, "ssh://"):
 		return TypeSSH
+	case strings.HasPrefix(e.URL, "postgres://") || strings.HasPrefix(e.URL, "postgresql://"):
+		return TypePostgres
 	default:
 		return TypeUNKNOWN
 	}
@@ -578,6 +581,12 @@ func (e *Endpoint) call(result *Result) {
 		result.Duration = duration
 		if e.needsToReadBody() {
 			result.Body = []byte(fmt.Sprintf("{\"status\":\"%s\"}", status))
+		}
+	} else if endpointType == TypePostgres {
+		result.Connected, result.Duration, result.Body, err = client.QueryPostgres(e.URL, e.getParsedBody(), e.needsToReadBody(), e.ClientConfig)
+		if err != nil {
+			result.AddError(err.Error())
+			return
 		}
 	} else {
 		response, err = client.GetHTTPClient(e.ClientConfig).Do(request)
