@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 func TestQueryMongoDB_MalformedURI(t *testing.T) {
@@ -145,5 +147,49 @@ func TestMongoBody_OmitsUnpopulatedFields(t *testing.T) {
 	}
 	if !strings.Contains(got, "connect_ms") || !strings.Contains(got, "probe_ms") {
 		t.Errorf("expected connect_ms and probe_ms to be present, got %s", got)
+	}
+}
+
+func TestMongoBody_FerretDBOmitsMongodInternals(t *testing.T) {
+	t.Parallel()
+	body := mongoBody{
+		ConnectMS: 20,
+		ProbeMS:   2,
+		Backend:   "ferretdb",
+		Version:   "2.0.0",
+		MetricsErrors: []string{
+			"serverStatus: connections and globalLock are not reported by this backend",
+			"replSetGetStatus: not supported by this backend",
+		},
+	}
+	marshalled, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("unexpected error: %s", err)
+	}
+	got := string(marshalled)
+	// Checked as a JSON key (quoted, with trailing colon) rather than a bare
+	// substring: "connections" also appears as an ordinary English word inside
+	// the MetricsErrors prose above, which would otherwise false-positive.
+	for _, absent := range []string{"connections", "global_lock_queue_total", "replication_lag_seconds", "repl_set_state"} {
+		key := `"` + absent + `":`
+		if strings.Contains(got, key) {
+			t.Errorf("field %q must be omitted on a backend that cannot report it, got %s", absent, got)
+		}
+	}
+	if !strings.Contains(got, `"backend":"ferretdb"`) {
+		t.Errorf("expected the backend to be labelled, got %s", got)
+	}
+}
+
+func TestDetectMongoBackend(t *testing.T) {
+	t.Parallel()
+	if got := detectMongoBackend(bson.M{"version": "7.0.5"}); got != "mongodb" {
+		t.Errorf("expected mongodb, got %q", got)
+	}
+	if got := detectMongoBackend(bson.M{"version": "7.0.42", "ferretdb": bson.M{"version": "2.0.0"}}); got != "ferretdb" {
+		t.Errorf("expected ferretdb from the ferretdb key, got %q", got)
+	}
+	if got := detectMongoBackend(bson.M{"version": "2.0.0-FerretDB"}); got != "ferretdb" {
+		t.Errorf("expected ferretdb from the version string, got %q", got)
 	}
 }

@@ -27,7 +27,27 @@ type mongoBody struct {
 	MetricsMS float64        `json:"metrics_ms,omitempty"`
 	Probe     map[string]any `json:"probe,omitempty"`
 
+	Backend string `json:"backend,omitempty"`
+	Version string `json:"version,omitempty"`
+
+	// Every field below is absent on backends that cannot report it.
+	IsWritablePrimary     *bool             `json:"is_writable_primary,omitempty"`
+	ReplSetState          string            `json:"repl_set_state,omitempty"`
+	ReplicationLagSeconds *float64          `json:"replication_lag_seconds,omitempty"`
+	Connections           *mongoConnections `json:"connections,omitempty"`
+	GlobalLockQueueTotal  *int64            `json:"global_lock_queue_total,omitempty"`
+	ActiveClientsTotal    *int64            `json:"active_clients_total,omitempty"`
+	UptimeSeconds         *int64            `json:"uptime_seconds,omitempty"`
+
 	MetricsErrors []string `json:"metrics_errors,omitempty"`
+}
+
+// mongoConnections is the connection gauge from serverStatus. FerretDB does not
+// report it, so it is a pointer and omitted there.
+type mongoConnections struct {
+	Current   int64   `json:"current"`
+	Available int64   `json:"available"`
+	UsedPct   float64 `json:"used_pct"`
 }
 
 // parseMongoProbeCommand turns the endpoint body into a command document,
@@ -95,11 +115,174 @@ func QueryMongoDB(uri, probeCommand string, collectMetrics bool, cfg *Config) (b
 		ProbeMS:   float64((duration - connectDuration).Microseconds()) / 1000,
 		Probe:     probe,
 	}
+	metricsStart := time.Now()
+	collectMongoMetrics(ctx, cli, &body)
+	body.MetricsMS = float64(time.Since(metricsStart).Microseconds()) / 1000
 	marshalled, err := json.Marshal(body)
 	if err != nil {
 		return true, duration, nil, fmt.Errorf("failed to marshal body: %w", err)
 	}
 	return true, duration, marshalled, nil
+}
+
+// detectMongoBackend labels the server as "mongodb" or "ferretdb" from its
+// buildInfo response. FerretDB advertises itself both as a top-level key and
+// inside the version string, depending on version; both are checked.
+func detectMongoBackend(buildInfo bson.M) string {
+	if _, ok := buildInfo["ferretdb"]; ok {
+		return "ferretdb"
+	}
+	if version, ok := buildInfo["version"].(string); ok && strings.Contains(strings.ToLower(version), "ferretdb") {
+		return "ferretdb"
+	}
+	return "mongodb"
+}
+
+// collectMongoMetrics fills the engine health fields of body.
+//
+// It never fails the check. Every command is attempted independently, and one
+// that a backend does not implement only adds an entry to MetricsErrors. This
+// is what lets a single implementation serve both real MongoDB and FerretDB.
+//
+// opLatencies is deliberately not collected: it is a cumulative average since
+// process start, so it drifts and cannot express current latency.
+// [RESPONSE_TIME] is the latency signal.
+func collectMongoMetrics(ctx context.Context, cli *mongo.Client, body *mongoBody) {
+	admin := cli.Database("admin")
+	var buildInfo bson.M
+	if err := admin.RunCommand(ctx, bson.D{{Key: "buildInfo", Value: 1}}).Decode(&buildInfo); err != nil {
+		body.MetricsErrors = append(body.MetricsErrors, "buildInfo: "+redactCredentials(err.Error()))
+	} else {
+		body.Backend = detectMongoBackend(buildInfo)
+		if version, ok := buildInfo["version"].(string); ok {
+			body.Version = version
+		}
+	}
+	var hello bson.M
+	if err := admin.RunCommand(ctx, bson.D{{Key: "hello", Value: 1}}).Decode(&hello); err != nil {
+		body.MetricsErrors = append(body.MetricsErrors, "hello: "+redactCredentials(err.Error()))
+	} else if writable, ok := hello["isWritablePrimary"].(bool); ok {
+		body.IsWritablePrimary = &writable
+	}
+	collectMongoServerStatus(ctx, admin, body)
+	collectMongoReplicationLag(ctx, admin, body)
+}
+
+// collectMongoServerStatus pulls the connection, lock and uptime gauges.
+// FerretDB accepts serverStatus but does not populate the mongod-internal
+// sections, so each is checked for presence rather than assumed.
+func collectMongoServerStatus(ctx context.Context, admin *mongo.Database, body *mongoBody) {
+	var status bson.M
+	if err := admin.RunCommand(ctx, bson.D{{Key: "serverStatus", Value: 1}}).Decode(&status); err != nil {
+		body.MetricsErrors = append(body.MetricsErrors, "serverStatus: "+redactCredentials(err.Error()))
+		return
+	}
+	if uptime, ok := toInt64(status["uptime"]); ok {
+		body.UptimeSeconds = &uptime
+	}
+	connections, ok := status["connections"].(bson.M)
+	if !ok {
+		body.MetricsErrors = append(body.MetricsErrors,
+			"serverStatus: connections and globalLock are not reported by this backend")
+		return
+	}
+	current, currentOK := toInt64(connections["current"])
+	available, availableOK := toInt64(connections["available"])
+	if currentOK && availableOK {
+		gauge := &mongoConnections{Current: current, Available: available}
+		if total := current + available; total > 0 {
+			gauge.UsedPct = float64(current) / float64(total) * 100
+		}
+		body.Connections = gauge
+	}
+	globalLock, ok := status["globalLock"].(bson.M)
+	if !ok {
+		return
+	}
+	if queue, ok := globalLock["currentQueue"].(bson.M); ok {
+		if total, ok := toInt64(queue["total"]); ok {
+			body.GlobalLockQueueTotal = &total
+		}
+	}
+	if clients, ok := globalLock["activeClients"].(bson.M); ok {
+		if total, ok := toInt64(clients["total"]); ok {
+			body.ActiveClientsTotal = &total
+		}
+	}
+}
+
+// collectMongoReplicationLag derives lag as primary optime minus this member's
+// optime. The command fails on a standalone deployment and on FerretDB, which
+// has no real replica sets — the flag and oplog collection it offers exist for
+// change-stream compatibility, not replication.
+func collectMongoReplicationLag(ctx context.Context, admin *mongo.Database, body *mongoBody) {
+	var status bson.M
+	if err := admin.RunCommand(ctx, bson.D{{Key: "replSetGetStatus", Value: 1}}).Decode(&status); err != nil {
+		body.MetricsErrors = append(body.MetricsErrors, "replSetGetStatus: not supported by this backend or not a replica set member")
+		return
+	}
+	if state, ok := status["myState"]; ok {
+		if stateStr, ok := replSetStateName(state); ok {
+			body.ReplSetState = stateStr
+		}
+	}
+	members, ok := status["members"].(bson.A)
+	if !ok {
+		return
+	}
+	var selfOptime, primaryOptime time.Time
+	var haveSelf, havePrimary bool
+	for _, raw := range members {
+		member, ok := raw.(bson.M)
+		if !ok {
+			continue
+		}
+		optime, ok := member["optimeDate"].(bson.DateTime)
+		if !ok {
+			continue
+		}
+		if isSelf, _ := member["self"].(bool); isSelf {
+			selfOptime, haveSelf = optime.Time(), true
+		}
+		if stateStr, _ := member["stateStr"].(string); stateStr == "PRIMARY" {
+			primaryOptime, havePrimary = optime.Time(), true
+		}
+	}
+	if haveSelf && havePrimary {
+		lag := primaryOptime.Sub(selfOptime).Seconds()
+		if lag < 0 {
+			lag = 0
+		}
+		body.ReplicationLagSeconds = &lag
+	}
+}
+
+// replSetStateName maps a replica set member state code to its name.
+func replSetStateName(state any) (string, bool) {
+	code, ok := toInt64(state)
+	if !ok {
+		return "", false
+	}
+	names := map[int64]string{
+		0: "STARTUP", 1: "PRIMARY", 2: "SECONDARY", 3: "RECOVERING",
+		5: "STARTUP2", 6: "UNKNOWN", 7: "ARBITER", 8: "DOWN",
+		9: "ROLLBACK", 10: "REMOVED",
+	}
+	name, ok := names[code]
+	return name, ok
+}
+
+// toInt64 normalises the several numeric types BSON can decode into.
+func toInt64(v any) (int64, bool) {
+	switch typed := v.(type) {
+	case int32:
+		return int64(typed), true
+	case int64:
+		return typed, true
+	case float64:
+		return int64(typed), true
+	}
+	return 0, false
 }
 
 // mongoDatabaseFromURI extracts the database name from a MongoDB URI, falling
