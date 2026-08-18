@@ -21,6 +21,14 @@ type probeResult struct {
 	Value any `json:"value"`
 }
 
+// postgresConnections is the connection saturation gauge. Collecting it
+// requires pg_monitor membership; see collectPostgresMetrics.
+type postgresConnections struct {
+	Used    int64   `json:"used"`
+	Max     int64   `json:"max"`
+	UsedPct float64 `json:"used_pct"`
+}
+
 // postgresBody is the JSON body exposed to conditions via [BODY].
 // Fields that could not be collected are omitted rather than defaulted: a
 // missing field fails its condition visibly, a zero value passes on fiction.
@@ -29,6 +37,21 @@ type postgresBody struct {
 	ProbeMS   float64      `json:"probe_ms"`
 	MetricsMS float64      `json:"metrics_ms,omitempty"`
 	Probe     *probeResult `json:"probe,omitempty"`
+
+	Version    string `json:"version,omitempty"`
+	InRecovery bool   `json:"in_recovery"`
+
+	// The four fields below require pg_monitor membership. They are pointers so
+	// that they are omitted entirely when that grant is missing, rather than
+	// reported as a silently wrong zero.
+	Connections                     *postgresConnections `json:"connections,omitempty"`
+	LongestRunningQuerySeconds      *float64             `json:"longest_running_query_seconds,omitempty"`
+	LongestIdleInTransactionSeconds *float64             `json:"longest_idle_in_transaction_seconds,omitempty"`
+	BlockedSessions                 *int64               `json:"blocked_sessions,omitempty"`
+
+	ReplicationLagSeconds float64 `json:"replication_lag_seconds"`
+	CacheHitRatio         float64 `json:"cache_hit_ratio"`
+	DatabaseSizeBytes     int64   `json:"database_size_bytes"`
 
 	MetricsErrors []string `json:"metrics_errors,omitempty"`
 }
@@ -39,6 +62,80 @@ func defaultedProbeQuery(query, fallback string) string {
 		return fallback
 	}
 	return query
+}
+
+// postgresMetricsQuery collects every gauge in a single round trip.
+//
+// Only gauges and instantaneous measurements appear here. Cumulative counters
+// (deadlocks, xact_rollback, ...) are deliberately excluded: Gatus checks are
+// stateless, so a counter has no previous value to diff against and cannot
+// express a meaningful threshold.
+//
+// Requires PostgreSQL 10 or later: backend_type and pg_monitor both landed in 10.
+const postgresMetricsQuery = `
+SELECT
+  current_setting('server_version')                                       AS version,
+  pg_is_in_recovery()                                                     AS in_recovery,
+  pg_has_role(current_user, 'pg_monitor', 'member')                       AS has_pg_monitor,
+  (SELECT count(*) FROM pg_stat_activity)                                 AS connections_used,
+  current_setting('max_connections')::bigint                              AS connections_max,
+  COALESCE((SELECT max(extract(epoch FROM now() - query_start))
+            FROM pg_stat_activity
+            WHERE state = 'active' AND backend_type = 'client backend'), 0) AS longest_running_query_seconds,
+  COALESCE((SELECT max(extract(epoch FROM now() - state_change))
+            FROM pg_stat_activity
+            WHERE state = 'idle in transaction'), 0)                      AS longest_idle_in_transaction_seconds,
+  (SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock')  AS blocked_sessions,
+  CASE WHEN pg_is_in_recovery()
+       THEN COALESCE(extract(epoch FROM now() - pg_last_xact_replay_timestamp()), 0)
+       ELSE 0 END                                                         AS replication_lag_seconds,
+  COALESCE((SELECT sum(blks_hit)::float8 / NULLIF(sum(blks_hit) + sum(blks_read), 0)
+            FROM pg_stat_database), 0)                                    AS cache_hit_ratio,
+  pg_database_size(current_database())                                    AS database_size_bytes`
+
+// collectPostgresMetrics fills the engine health fields of body.
+//
+// It never returns an error that should fail the check: a missing grant is a
+// configuration problem, not an outage. Problems are appended to
+// body.MetricsErrors and the affected fields are left absent.
+func collectPostgresMetrics(ctx context.Context, db *sql.DB, body *postgresBody) {
+	var (
+		version                         string
+		inRecovery, hasPgMonitor        bool
+		connectionsUsed, connectionsMax int64
+		longestRunningQuery             float64
+		longestIdleInTransaction        float64
+		blockedSessions                 int64
+	)
+	err := db.QueryRowContext(ctx, postgresMetricsQuery).Scan(
+		&version, &inRecovery, &hasPgMonitor,
+		&connectionsUsed, &connectionsMax,
+		&longestRunningQuery, &longestIdleInTransaction, &blockedSessions,
+		&body.ReplicationLagSeconds, &body.CacheHitRatio, &body.DatabaseSizeBytes,
+	)
+	if err != nil {
+		body.MetricsErrors = append(body.MetricsErrors, "metrics query failed: "+redactCredentials(err.Error()))
+		return
+	}
+	body.Version = version
+	body.InRecovery = inRecovery
+	if !hasPgMonitor {
+		// Without pg_monitor, pg_stat_activity shows only this role's own
+		// sessions, so these four values would be silently wrong rather than
+		// merely missing. Omit them and say why.
+		body.MetricsErrors = append(body.MetricsErrors,
+			"connections, longest_running_query_seconds, longest_idle_in_transaction_seconds and blocked_sessions omitted: "+
+				"the monitoring role lacks pg_monitor membership, so pg_stat_activity would report only its own sessions")
+		return
+	}
+	connections := &postgresConnections{Used: connectionsUsed, Max: connectionsMax}
+	if connectionsMax > 0 {
+		connections.UsedPct = float64(connectionsUsed) / float64(connectionsMax) * 100
+	}
+	body.Connections = connections
+	body.LongestRunningQuerySeconds = &longestRunningQuery
+	body.LongestIdleInTransactionSeconds = &longestIdleInTransaction
+	body.BlockedSessions = &blockedSessions
 }
 
 // QueryPostgres connects to a PostgreSQL database, runs a probe query, and
@@ -89,6 +186,9 @@ func QueryPostgres(dsn, probeQuery string, collectMetrics bool, cfg *Config) (bo
 		ProbeMS:   float64((duration - connectDuration).Microseconds()) / 1000,
 		Probe:     probe,
 	}
+	metricsStart := time.Now()
+	collectPostgresMetrics(ctx, db, &body)
+	body.MetricsMS = float64(time.Since(metricsStart).Microseconds()) / 1000
 	marshalled, err := json.Marshal(body)
 	if err != nil {
 		return true, duration, nil, fmt.Errorf("failed to marshal body: %w", err)
