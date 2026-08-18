@@ -55,6 +55,7 @@ const (
 	TypeWS       Type = "WEBSOCKET"
 	TypeSSH      Type = "SSH"
 	TypePostgres Type = "POSTGRES"
+	TypeMongoDB  Type = "MONGODB"
 	TypeUNKNOWN  Type = "UNKNOWN"
 )
 
@@ -198,6 +199,8 @@ func (e *Endpoint) Type() Type {
 		return TypeSSH
 	case strings.HasPrefix(e.URL, "postgres://") || strings.HasPrefix(e.URL, "postgresql://"):
 		return TypePostgres
+	case strings.HasPrefix(e.URL, "mongodb://") || strings.HasPrefix(e.URL, "mongodb+srv://"):
+		return TypeMongoDB
 	default:
 		return TypeUNKNOWN
 	}
@@ -584,6 +587,12 @@ func (e *Endpoint) call(result *Result) {
 		}
 	} else if endpointType == TypePostgres {
 		result.Connected, result.Duration, result.Body, err = client.QueryPostgres(e.URL, e.getParsedBody(), e.needsToReadBody(), e.ClientConfig)
+		if err != nil {
+			result.AddError(err.Error())
+			return
+		}
+	} else if endpointType == TypeMongoDB {
+		result.Connected, result.Duration, result.Body, err = client.QueryMongoDB(e.URL, e.getParsedBody(), e.needsToReadBody(), e.ClientConfig)
 		if err != nil {
 			result.AddError(err.Error())
 			return

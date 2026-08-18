@@ -437,6 +437,18 @@ func TestEndpoint_Type(t *testing.T) {
 		},
 		{
 			args: args{
+				URL: "mongodb://user:pw@mongo.internal:27017/tenant",
+			},
+			want: TypeMongoDB,
+		},
+		{
+			args: args{
+				URL: "mongodb+srv://user:pw@cluster.example.net/tenant",
+			},
+			want: TypeMongoDB,
+		},
+		{
+			args: args{
 				URL: "invalid://example.org",
 			},
 			want: TypeUNKNOWN,
