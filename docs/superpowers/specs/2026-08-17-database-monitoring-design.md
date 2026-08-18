@@ -433,12 +433,26 @@ new dependency either.
 
 ## 13. Open questions
 
-1. The exact FerretDB self-identification field in `buildInfo`/`serverStatus`
-   (§5.2). Resolved by running `db.runCommand({buildInfo: 1})` against a live
-   instance.
-2. Whether FerretDB's `--debug-addr` is currently bound to a Gatus-reachable
-   address in the Nexfar deployment, or whether that needs a change (§5.3).
-3. Whether each FerretDB tenant's backing PostgreSQL is distinct from that tenant's
-   application PostgreSQL, which decides whether §8 needs the fourth endpoint.
-4. Thresholds. Every number in the examples here is a placeholder; real values need
-   a baseline from production before any of these conditions is meaningful.
+All four questions below remain open. The integration-test layer described in §10
+that would have exercised a live FerretDB instance did not run during
+implementation — the Docker daemon required to bring up
+`.examples/docker-compose-database-monitoring/` was unavailable in the
+implementation environment — so none of them were answered by a live run as
+originally planned. `docs/database-monitoring.md` flags the FerretDB body shape as
+an unconfirmed prediction for the same reason.
+
+1. **Still open.** The exact FerretDB self-identification field in
+   `buildInfo`/`serverStatus` (§5.2). `detectMongoBackend`'s heuristics (a
+   top-level `ferretdb` key, or `"ferretdb"` inside the version string) are
+   implemented but have never been checked against a real FerretDB response.
+   Resolve by running `db.runCommand({buildInfo: 1})` against a live instance via
+   `.examples/docker-compose-database-monitoring/`.
+2. **Still open.** Whether FerretDB's `--debug-addr` is currently bound to a
+   Gatus-reachable address in the Nexfar deployment, or whether that needs a
+   change (§5.3).
+3. **Still open.** Whether each FerretDB tenant's backing PostgreSQL is distinct
+   from that tenant's application PostgreSQL, which decides whether §8 needs the
+   fourth endpoint.
+4. **Still open.** Thresholds. Every number in the examples here, and in
+   `docs/database-monitoring.md`, is a placeholder; real values need a baseline
+   from production before any of these conditions is meaningful.

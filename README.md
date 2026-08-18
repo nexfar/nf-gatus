@@ -128,6 +128,8 @@ Have any feedback or questions? [Create a discussion](https://github.com/TwiN/ga
   - [Monitoring an endpoint using SSH](#monitoring-an-endpoint-using-ssh)
   - [Monitoring an endpoint using STARTTLS](#monitoring-an-endpoint-using-starttls)
   - [Monitoring an endpoint using TLS](#monitoring-an-endpoint-using-tls)
+  - [Monitoring a PostgreSQL database](#monitoring-a-postgresql-database)
+  - [Monitoring a MongoDB or FerretDB database](#monitoring-a-mongodb-or-ferretdb-database)
   - [Monitoring domain expiration](#monitoring-domain-expiration)
   - [Concurrency](#concurrency)
   - [Reloading configuration on the fly](#reloading-configuration-on-the-fly)
@@ -3235,6 +3237,101 @@ If `endpoints[].body` is set then it is sent and the first 1024 bytes of the res
 
 Placeholder `[STATUS]` as well as the fields `endpoints[].headers`,
 `endpoints[].method` and `endpoints[].graphql` are not supported for TLS endpoints.
+
+
+### Monitoring a PostgreSQL database
+By prefixing `endpoints[].url` with `postgres://` or `postgresql://`, Gatus connects directly to a
+PostgreSQL database, runs a probe query, and — only if a condition references `[BODY]` — collects a
+snapshot of engine health metrics in the same round trip:
+```yaml
+endpoints:
+  - name: postgres
+    group: navarromed
+    url: "postgres://gatus_monitor:${DB_MONITOR_PASSWORD}@navarromed-db.internal:5432/navarromed?sslmode=require"
+    interval: 1m
+    client:
+      timeout: 5s
+    conditions:
+      - "[CONNECTED] == true"
+      - "[RESPONSE_TIME] < 200"
+      - "[BODY].connections.used_pct < 80"
+      - "[BODY].longest_running_query_seconds < 60"
+```
+`endpoints[].body`, when set, is the probe query run against the database (default: `SELECT 1`). Its
+result is exposed as `[BODY].probe.value` (first column of the first row) and `[BODY].probe.rows`, so
+a representative read query can be asserted on, not just timed:
+```yaml
+    body: "SELECT count(*) FROM orders WHERE created_at > now() - interval '1 hour'"
+    conditions:
+      - "[RESPONSE_TIME] < 500"
+      - "[BODY].probe.value > 0"
+```
+`[RESPONSE_TIME]` covers connection establishment plus the probe query only; metric collection is
+excluded and reported separately as `[BODY].metrics_ms`.
+
+Most metric fields require the `gatus_monitor` role to be a member of `pg_monitor`:
+```sql
+CREATE ROLE gatus_monitor WITH LOGIN PASSWORD '...';
+GRANT pg_monitor TO gatus_monitor;
+GRANT CONNECT ON DATABASE <tenant> TO gatus_monitor;
+```
+Without `pg_monitor`, `connections`, `longest_running_query_seconds`,
+`longest_idle_in_transaction_seconds` and `blocked_sessions` are omitted from the body rather than
+reported as a wrong number — see [Database monitoring](docs/database-monitoring.md) for why.
+
+See [Database monitoring](docs/database-monitoring.md) for the full body schema, every field's
+semantics (including the `cache_hit_ratio_since_reset` caveat), and worked per-tenant examples.
+
+
+### Monitoring a MongoDB or FerretDB database
+By prefixing `endpoints[].url` with `mongodb://` or `mongodb+srv://`, Gatus connects directly to a
+MongoDB-compatible server, runs a probe command, and — only if a condition references `[BODY]` —
+collects engine health metrics. The same check works against real MongoDB and against
+[FerretDB](https://www.ferretdb.com/) (MongoDB wire protocol backed by PostgreSQL); the response body
+is simply shaped differently depending on what the backend can report:
+```yaml
+endpoints:
+  - name: mongodb
+    group: navarromed
+    url: "mongodb://gatus_monitor:${DB_MONITOR_PASSWORD}@navarromed-mongo.internal:27017/navarromed?authSource=admin"
+    interval: 1m
+    client:
+      timeout: 5s
+    conditions:
+      - "[CONNECTED] == true"
+      - "[RESPONSE_TIME] < 200"
+      - "[BODY].is_writable_primary == true"
+      - "[BODY].connections.used_pct < 80"
+```
+`endpoints[].body`, when set, is the probe command document (default: `{"ping": 1}`), and its result is
+exposed as `[BODY].probe`:
+```yaml
+    body: '{"count": "orders"}'
+    conditions:
+      - "[RESPONSE_TIME] < 500"
+      - "[BODY].probe.n > 0"
+```
+`[RESPONSE_TIME]` covers connection establishment plus the probe command only; metric collection is
+excluded and reported separately as `[BODY].metrics_ms`. A malformed probe document is rejected at
+startup, not at check time.
+
+The monitoring user needs the `clusterMonitor` role. A FerretDB tenant's body is thin by design — it
+has no `mongod` internals to report, since its connections, locks and replication live in the backing
+PostgreSQL (which can itself be monitored with the `postgres://` type above), and `metrics_errors`
+records why each field is absent:
+```yaml
+  - name: mongodb-facade
+    group: some-tenant
+    url: "mongodb://gatus_monitor:${DB_MONITOR_PASSWORD}@some-tenant-ferretdb.internal:27017/some_tenant"
+    interval: 1m
+    client:
+      timeout: 5s
+    conditions:
+      - "[CONNECTED] == true"
+      - "[RESPONSE_TIME] < 200"
+```
+See [Database monitoring](docs/database-monitoring.md) for the full body schema for real MongoDB and
+FerretDB, the FerretDB `/debug/*` endpoints that carry its real signals, and worked per-tenant examples.
 
 
 ### Monitoring domain expiration
