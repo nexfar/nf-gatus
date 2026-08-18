@@ -1,0 +1,39 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: tenant
+    ports:
+      - "5432:5432"
+
+  mongodb:
+    image: mongo:7
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: root
+    ports:
+      - "27017:27017"
+
+  ferretdb-postgres:
+    image: ghcr.io/ferretdb/postgres-documentdb:latest
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    ports:
+      - "5433:5432"
+
+  ferretdb:
+    image: ghcr.io/ferretdb/ferretdb:latest
+    environment:
+      FERRETDB_POSTGRESQL_URL: postgres://postgres:postgres@ferretdb-postgres:5432/postgres
+      # Bind the debug handler to all interfaces so /debug/readyz is reachable
+      # from outside the container. It defaults to 127.0.0.1:8088.
+      FERRETDB_DEBUG_ADDR: ":8088"
+    ports:
+      - "27018:27017"
+      - "8088:8088"
+    depends_on:
+      - ferretdb-postgres
