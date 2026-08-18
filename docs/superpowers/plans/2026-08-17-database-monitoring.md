@@ -1301,13 +1301,15 @@ git commit -m "feat(client): expose mongodb and ferretdb engine health in the en
 
 Spec §9. A `postgres://` or `mongodb://` URL with no host parses fine as a URL but is useless as a DSN. Without this, the failure is a runtime error on every interval forever instead of a startup panic with a clear message — Gatus treats invalid config as fatal by design.
 
+The same reasoning covers a second case, surfaced by Task 3's review: a `mongodb://` endpoint whose `body:` is not a valid command document fails inside `parseMongoProbeCommand` *before any connection is attempted*, and reports `connected=false`. A misconfigured endpoint is therefore indistinguishable from a real outage on the dashboard — forever. Validating the document at startup converts that into a boot-time panic naming the problem.
+
 **Files:**
 - Modify: `config/endpoint/endpoint.go` (`ValidateAndSetDefaults` at ~line 204, error block at ~line 60)
 - Modify: `config/endpoint/endpoint_test.go`
 
 **Interfaces:**
-- Consumes: `TypePostgres` (Task 1), `TypeMongoDB` (Task 3).
-- Produces: `endpoint.ErrEndpointWithInvalidDatabaseURL`.
+- Consumes: `TypePostgres` (Task 1), `TypeMongoDB` (Task 3), `client.ValidateMongoProbeCommand` (added in this task).
+- Produces: `endpoint.ErrEndpointWithInvalidDatabaseURL`, `endpoint.ErrEndpointWithInvalidProbeCommand`, `client.ValidateMongoProbeCommand`.
 
 ---
 
@@ -1381,16 +1383,108 @@ In `ValidateAndSetDefaults`, immediately after the existing `if e.Type() == Type
 Run: `go test ./config/endpoint/ -run 'TestEndpoint_ValidateAndSetDefaults' -v`
 Expected: PASS, including the pre-existing validation scenarios.
 
-- [ ] **Step 6: Verify nothing else regressed**
+- [ ] **Step 6: Verify the url validation in isolation**
+
+Run: `go build ./... && go test ./config/endpoint/`
+Expected: PASS.
+
+- [ ] **Step 7: Write the failing test for probe-command validation**
+
+Append to `config/endpoint/endpoint_test.go`:
+
+```go
+func TestEndpoint_ValidateAndSetDefaultsWithMongoProbeCommand(t *testing.T) {
+	scenarios := []struct {
+		name        string
+		body        string
+		expectedErr error
+	}{
+		{name: "empty-body-uses-default", body: "", expectedErr: nil},
+		{name: "valid-command-document", body: `{"dbStats": 1}`, expectedErr: nil},
+		{name: "not-json", body: "not json", expectedErr: ErrEndpointWithInvalidProbeCommand},
+		{name: "empty-document", body: "{}", expectedErr: ErrEndpointWithInvalidProbeCommand},
+	}
+	for _, scenario := range scenarios {
+		t.Run(scenario.name, func(t *testing.T) {
+			endpoint := &Endpoint{
+				Name:       "mongo",
+				URL:        "mongodb://u:p@mongo.internal:27017/tenant",
+				Body:       scenario.body,
+				Conditions: []Condition{"[CONNECTED] == true"},
+			}
+			err := endpoint.ValidateAndSetDefaults()
+			if !errors.Is(err, scenario.expectedErr) {
+				t.Errorf("expected error %v, got %v", scenario.expectedErr, err)
+			}
+		})
+	}
+}
+```
+
+- [ ] **Step 8: Run the test to verify it fails**
+
+Run: `go test ./config/endpoint/ -run 'TestEndpoint_ValidateAndSetDefaultsWithMongoProbeCommand' -v`
+Expected: FAIL — `undefined: ErrEndpointWithInvalidProbeCommand`.
+
+- [ ] **Step 9: Export a validator from the client package**
+
+`parseMongoProbeCommand` is unexported and lives in `client`. Rather than duplicating its parsing rules in `config/endpoint` — which would let the two drift apart silently — export a thin wrapper in `client/mongodb.go`:
+
+```go
+// ValidateMongoProbeCommand reports whether body is a usable probe command
+// document. It exists so that config validation rejects a malformed document at
+// startup instead of letting every check report a false outage forever.
+func ValidateMongoProbeCommand(body string) error {
+	_, err := parseMongoProbeCommand(body)
+	return err
+}
+```
+
+- [ ] **Step 10: Add the named error and the validation**
+
+In `config/endpoint/endpoint.go`, add to the `var (...)` error block, after `ErrEndpointWithInvalidDatabaseURL`:
+
+```go
+	// ErrEndpointWithInvalidProbeCommand is the error with which Gatus will panic if a mongodb endpoint's body is not a valid command document
+	ErrEndpointWithInvalidProbeCommand = errors.New("the body of a mongodb:// endpoint must be a valid command document, e.g. {\"ping\": 1}")
+```
+
+Then extend the database branch added in Step 4 so the whole block reads:
+
+```go
+	if endpointType := e.Type(); endpointType == TypePostgres || endpointType == TypeMongoDB {
+		// url.Parse accepts "mongodb://" and "postgres:///tenant", which parse but
+		// cannot be connected to. Catch them at startup rather than every interval.
+		if parsedURL, err := url.Parse(e.URL); err != nil || len(parsedURL.Host) == 0 {
+			return ErrEndpointWithInvalidDatabaseURL
+		}
+		if endpointType == TypeMongoDB {
+			// A malformed command document fails before any connection is attempted,
+			// so at runtime it is indistinguishable from a real outage. Reject it here.
+			if err := client.ValidateMongoProbeCommand(e.getParsedBody()); err != nil {
+				return fmt.Errorf("%w: %s", ErrEndpointWithInvalidProbeCommand, err)
+			}
+		}
+	}
+```
+
+`fmt` and the `client` package are already imported by this file.
+
+- [ ] **Step 11: Run the tests to verify they pass**
+
+Run: `go test ./config/endpoint/ -run 'TestEndpoint_ValidateAndSetDefaults' -v`
+Expected: PASS, including the pre-existing validation scenarios.
+
+- [ ] **Step 12: Verify nothing else regressed**
 
 Run: `go build ./... && go test ./config/... ./client/`
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 13: Commit**
 
 ```bash
-git add config/endpoint/endpoint.go config/endpoint/endpoint_test.go
-git commit -m "feat(endpoint): reject database endpoints whose url has no host"
+git add config/endpoint/endpoint.go config/endpoint/endpoint_test.go client/mongodb.go
+git commit -m "feat(endpoint): validate database urls and mongodb probe commands at startup"
 ```
 
 ---
