@@ -272,12 +272,13 @@ func (e *Endpoint) ValidateAndSetDefaults() error {
 			return fmt.Errorf("%v: %w", ErrInvalidConditionFormat, err)
 		}
 	}
-	// This block sits above the DNS and SSH early returns below on purpose. Both
-	// of those return outright, so a postgres:// or mongodb:// endpoint that also
-	// carries a dns: or ssh: block would otherwise skip every check here - and an
-	// ssh: block is exactly what an operator whose database sits behind a bastion
-	// reaches for, since the documentation presents it as a generic per-endpoint
-	// option.
+	// This block sits above the SSH early return below on purpose: that return
+	// exits outright, so a postgres:// or mongodb:// endpoint that also carries
+	// an ssh: block would otherwise skip every check here - and an ssh: block is
+	// exactly what an operator whose database sits behind a bastion reaches for,
+	// since the documentation presents it as a generic per-endpoint option.
+	// (A dns: block is not affected either way: DNSConfig != nil makes Type()
+	// return TypeDNS, so such an endpoint is never a database endpoint at all.)
 	if endpointType := e.Type(); endpointType == TypePostgres || endpointType == TypeMongoDB {
 		// url.Parse accepts "mongodb://" and "postgres:///tenant", which parse but
 		// cannot be connected to. Catch them at startup rather than every interval.

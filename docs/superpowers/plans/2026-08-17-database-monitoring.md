@@ -460,7 +460,7 @@ Extends the `postgres://` body with engine health gauges, guarded against the `p
 
 **Interfaces:**
 - Consumes: `postgresBody`, `probeResult`, `redactError` from Task 1.
-- Produces: `postgresBody` gains `Version`, `InRecovery`, `Connections`, `LongestRunningQuerySeconds`, `LongestIdleInTransactionSeconds`, `BlockedSessions`, `ReplicationLagSeconds`, `CacheHitRatio`, `DatabaseSizeBytes`.
+- Produces: `postgresBody` gains `Version`, `InRecovery`, `Connections`, `LongestRunningQuerySeconds`, `LongestIdleInTransactionSeconds`, `BlockedSessions`, `ReplicationLagSeconds`, `CacheHitPctSinceReset`, `DatabaseSizeBytes`.
 
 ---
 
@@ -557,7 +557,7 @@ Add these fields to `postgresBody`, between `Probe` and `MetricsErrors`:
 
 	InRecovery              *bool    `json:"in_recovery,omitempty"`
 	ReplicationLagSeconds   *float64 `json:"replication_lag_seconds,omitempty"`
-	CacheHitRatioSinceReset *float64 `json:"cache_hit_ratio_since_reset,omitempty"`
+	CacheHitPctSinceReset   *float64 `json:"cache_hit_pct_since_reset,omitempty"`
 	DatabaseSizeBytes       *int64   `json:"database_size_bytes,omitempty"`
 ```
 
@@ -589,8 +589,8 @@ SELECT
   CASE WHEN pg_is_in_recovery()
        THEN COALESCE(extract(epoch FROM now() - pg_last_xact_replay_timestamp()), 0)
        ELSE 0 END                                                         AS replication_lag_seconds,
-  COALESCE((SELECT sum(blks_hit)::float8 / NULLIF(sum(blks_hit) + sum(blks_read), 0)
-            FROM pg_stat_database), 0)                                    AS cache_hit_ratio_since_reset,
+  COALESCE((SELECT 100 * sum(blks_hit)::float8 / NULLIF(sum(blks_hit) + sum(blks_read), 0)
+            FROM pg_stat_database), 0)                              AS cache_hit_pct_since_reset,
   pg_database_size(current_database())                                    AS database_size_bytes`
 
 // collectPostgresMetrics fills the engine health fields of body.
@@ -611,7 +611,7 @@ func collectPostgresMetrics(ctx context.Context, db *sql.DB, body *postgresBody)
 		&version, &inRecovery, &hasPgMonitor,
 		&connectionsUsed, &connectionsMax,
 		&longestRunningQuery, &longestIdleInTransaction, &blockedSessions,
-		&body.ReplicationLagSeconds, &body.CacheHitRatio, &body.DatabaseSizeBytes,
+		&body.ReplicationLagSeconds, &body.CacheHitPctSinceReset, &body.DatabaseSizeBytes,
 	)
 	if err != nil {
 		body.MetricsErrors = append(body.MetricsErrors, "metrics query failed: "+redactCredentials(err.Error()))

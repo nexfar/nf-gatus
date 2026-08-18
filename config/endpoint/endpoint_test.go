@@ -1864,9 +1864,9 @@ func TestEndpoint_ValidateAndSetDefaultsWithMongoProbeCommand(t *testing.T) {
 }
 
 // TestEndpoint_ValidateAndSetDefaultsWithDatabaseURLAndSSHBlock guards the
-// ordering of ValidateAndSetDefaults: the ssh: and dns: blocks return early, so
-// the database validation has to run before them or a database endpoint that
-// also carries one of those blocks silently skips every database check.
+// ordering of ValidateAndSetDefaults: the ssh: block returns early, so the
+// database validation has to run before it or a database endpoint that also
+// carries an ssh: block silently skips every database check.
 func TestEndpoint_ValidateAndSetDefaultsWithDatabaseURLAndSSHBlock(t *testing.T) {
 	endpoint := &Endpoint{
 		Name:       "mongo-behind-a-bastion",

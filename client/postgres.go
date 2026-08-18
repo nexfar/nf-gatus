@@ -197,11 +197,16 @@ func withPostgresConnectTimeout(dsn string, timeout time.Duration) string {
 		return dsn
 	}
 	query := parsed.Query()
-	if query.Has("connect_timeout") {
-		// Never override an explicit operator choice, including an explicitly
-		// empty one.
+	if len(strings.TrimSpace(query.Get("connect_timeout"))) > 0 {
+		// Never override an explicit operator choice.
 		return dsn
 	}
+	// An empty or whitespace-only value is NOT an operator choice - it is the
+	// bug in disguise. lib/pq's accrue skips empty values, so "connect_timeout="
+	// falls straight back to "wait indefinitely". Gatus runs the whole
+	// configuration through os.ExpandEnv, so "?connect_timeout=${PG_TIMEOUT}"
+	// with PG_TIMEOUT unset produces literally "?connect_timeout=". Treat it as
+	// absent and inject the derived value.
 	// lib/pq expects whole seconds, and rounding down would turn a sub-second
 	// timeout into 0, which means "wait indefinitely" - the exact bug this
 	// guards against. Round up, with a floor of one second.

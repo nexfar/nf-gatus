@@ -68,9 +68,17 @@ the optional probe query — exactly as SSH already uses `body:` to carry the co
   conditions:
     - "[CONNECTED] == true"
     - "[RESPONSE_TIME] < 200"
+    - "has([BODY].connections) == true"
     - "[BODY].connections.used_pct < 80"
+    - "has([BODY].longest_running_query_seconds) == true"
     - "[BODY].longest_running_query_seconds < 60"
 ```
+
+Every `<` or `<=` condition is paired with a `has(...) == true` guard as a
+separate list entry. Conditions are AND'd, so the guard is what makes an absent
+field fail the check: an unguarded `<` against a field that was never collected
+passes silently, which is exactly backwards during an incident. See
+`docs/database-monitoring.md`, "`<` and `<=` conditions need a presence guard".
 
 Defaults for the probe query when `body:` is empty: `SELECT 1` for Postgres,
 `{"ping": 1}` for MongoDB.

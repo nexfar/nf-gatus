@@ -206,10 +206,13 @@ A value that could not be collected is **absent from the JSON body** (via
 is distinguishable from "never measured" — a nil pointer marshals to nothing, a
 `*float64` pointing at `0.0` marshals to `0`. A handful of fields
 (`version`, `connect_ms`, `probe_ms`, `metrics_errors`) are plain, non-pointer
-types instead, because they have no meaningful zero to confuse with absence: an
-empty `version` string, an empty `metrics_errors` slice, or a `0` timing are
-never ambiguous with "not collected" the way a `0` connection count would be, so
-`omitempty` on the plain type is sufficient. Either way, the JSON contract is the
+types instead, because they have no meaningful zero to confuse with absence.
+`version` and `metrics_errors` carry `omitempty`, so an empty string or an empty
+slice simply disappears. `connect_ms` and `probe_ms` carry no `omitempty` at all
+and are **always** present: the body only exists when the connection and the
+probe both succeeded, so both timings were by definition measured, and a `0`
+there means "faster than the timer's resolution", never "not collected". Either
+way, the JSON contract is the
 same for every field: a condition that references an absent field fails
 visibly, on purpose. A defaulted zero would let a threshold pass on a value that
 was never actually measured (imagine `[BODY].blocked_sessions == 0` silently

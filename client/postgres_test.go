@@ -157,10 +157,26 @@ func TestWithPostgresConnectTimeout(t *testing.T) {
 			expected: "postgres://db.internal:5432/tenant?connect_timeout=30",
 		},
 		{
-			name:     "explicit-empty-value-is-still-an-operator-choice",
+			// os.ExpandEnv over the configuration turns "${PG_TIMEOUT}" into ""
+			// when the variable is unset, and lib/pq's accrue skips empty values,
+			// falling back to "wait indefinitely" - the very bug this guards
+			// against. An empty value is absence, not a choice.
+			name:     "explicit-empty-value-is-treated-as-absent",
 			dsn:      "postgres://db.internal:5432/tenant?connect_timeout=",
 			timeout:  2 * time.Second,
-			expected: "postgres://db.internal:5432/tenant?connect_timeout=",
+			expected: "postgres://db.internal:5432/tenant?connect_timeout=2",
+		},
+		{
+			name:     "whitespace-only-value-is-treated-as-absent",
+			dsn:      "postgres://db.internal:5432/tenant?connect_timeout=%20%20",
+			timeout:  2 * time.Second,
+			expected: "postgres://db.internal:5432/tenant?connect_timeout=2",
+		},
+		{
+			name:     "empty-value-alongside-another-parameter-is-still-filled-in",
+			dsn:      "postgres://db.internal:5432/tenant?sslmode=require&connect_timeout=",
+			timeout:  4 * time.Second,
+			expected: "postgres://db.internal:5432/tenant?connect_timeout=4&sslmode=require",
 		},
 		{
 			name:     "rounds-up-to-the-next-whole-second",
