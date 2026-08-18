@@ -43,7 +43,7 @@ type postgresBody struct {
 
 	Version string `json:"version,omitempty"`
 
-	// InRecovery, ReplicationLagSeconds, CacheHitRatioSinceReset and
+	// InRecovery, ReplicationLagSeconds, CacheHitPctSinceReset and
 	// DatabaseSizeBytes are pointers so that a whole-query failure (e.g. a
 	// context deadline shared with connect+probe) leaves them absent rather
 	// than reporting them as a silently wrong zero.
@@ -59,13 +59,19 @@ type postgresBody struct {
 
 	ReplicationLagSeconds *float64 `json:"replication_lag_seconds,omitempty"`
 
-	// CacheHitRatioSinceReset is blks_hit / (blks_hit + blks_read) accumulated
-	// since the last pg_stat_database reset (typically server start), not an
-	// instantaneous rate. On a long-lived instance it is dominated by months
-	// of history, so a real, ongoing cache regression barely moves it; the
-	// name carries that caveat because it is the only thing a person writing
-	// a threshold will read.
-	CacheHitRatioSinceReset *float64 `json:"cache_hit_ratio_since_reset,omitempty"`
+	// CacheHitPctSinceReset is 100 * blks_hit / (blks_hit + blks_read)
+	// accumulated since the last pg_stat_database reset (typically server
+	// start), not an instantaneous rate. On a long-lived instance it is
+	// dominated by months of history, so a real, ongoing cache regression
+	// barely moves it; the name carries that caveat because it is the only
+	// thing a person writing a threshold will read.
+	//
+	// It is a percentage (0..100) rather than a ratio (0..1) because
+	// sanitizeAndResolveNumerical casts both sides of a comparison to int64:
+	// a ratio and its threshold would both truncate to 0, so
+	// "> 0.9" rendered as "(0) > 0.9 (0)" and no threshold an operator could
+	// write against the field worked at all.
+	CacheHitPctSinceReset *float64 `json:"cache_hit_pct_since_reset,omitempty"`
 
 	DatabaseSizeBytes *int64 `json:"database_size_bytes,omitempty"`
 
@@ -83,8 +89,8 @@ func defaultedProbeQuery(query, fallback string) string {
 // postgresMetricsQuery collects every gauge in a single round trip.
 //
 // Every field here is an instantaneous measurement, with one exception:
-// cache_hit_ratio (scanned into CacheHitRatioSinceReset) is a cumulative
-// average of blks_hit/blks_read since the last pg_stat_database reset
+// cache_hit_pct_since_reset (scanned into CacheHitPctSinceReset) is a
+// cumulative average of blks_hit/blks_read since the last pg_stat_database reset
 // (typically server start), so it is slow to reflect a recent regression on
 // a long-lived instance. Cumulative counters proper (deadlocks,
 // xact_rollback, ...) are deliberately excluded entirely: Gatus checks are
@@ -109,8 +115,8 @@ SELECT
   CASE WHEN pg_is_in_recovery()
        THEN COALESCE(extract(epoch FROM now() - pg_last_xact_replay_timestamp()), 0)
        ELSE 0 END                                                         AS replication_lag_seconds,
-  COALESCE((SELECT sum(blks_hit)::float8 / NULLIF(sum(blks_hit) + sum(blks_read), 0)
-            FROM pg_stat_database), 0)                                    AS cache_hit_ratio,
+  COALESCE((SELECT 100 * sum(blks_hit)::float8 / NULLIF(sum(blks_hit) + sum(blks_read), 0)
+            FROM pg_stat_database), 0)                              AS cache_hit_pct_since_reset,
   pg_database_size(current_database())                                    AS database_size_bytes`
 
 // collectPostgresMetrics fills the engine health fields of body.
@@ -127,14 +133,14 @@ func collectPostgresMetrics(ctx context.Context, db *sql.DB, body *postgresBody)
 		longestIdleInTransaction        float64
 		blockedSessions                 int64
 		replicationLagSeconds           float64
-		cacheHitRatioSinceReset         float64
+		cacheHitPctSinceReset           float64
 		databaseSizeBytes               int64
 	)
 	err := db.QueryRowContext(ctx, postgresMetricsQuery).Scan(
 		&version, &inRecovery, &hasPgMonitor,
 		&connectionsUsed, &connectionsMax,
 		&longestRunningQuery, &longestIdleInTransaction, &blockedSessions,
-		&replicationLagSeconds, &cacheHitRatioSinceReset, &databaseSizeBytes,
+		&replicationLagSeconds, &cacheHitPctSinceReset, &databaseSizeBytes,
 	)
 	if err != nil {
 		// Leave every metric field absent: the query failed as a whole, so
@@ -146,7 +152,7 @@ func collectPostgresMetrics(ctx context.Context, db *sql.DB, body *postgresBody)
 	body.Version = version
 	body.InRecovery = &inRecovery
 	body.ReplicationLagSeconds = &replicationLagSeconds
-	body.CacheHitRatioSinceReset = &cacheHitRatioSinceReset
+	body.CacheHitPctSinceReset = &cacheHitPctSinceReset
 	body.DatabaseSizeBytes = &databaseSizeBytes
 	if !hasPgMonitor {
 		// Without pg_monitor, pg_stat_activity shows only this role's own

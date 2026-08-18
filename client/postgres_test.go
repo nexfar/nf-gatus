@@ -99,7 +99,7 @@ func TestPostgresBody_OmitsAllMetricsWhenMetricsQueryFails(t *testing.T) {
 		t.Fatalf("unexpected error: %s", err)
 	}
 	got := string(marshalled)
-	for _, absent := range []string{"in_recovery", "replication_lag_seconds", "cache_hit_ratio_since_reset", "database_size_bytes"} {
+	for _, absent := range []string{"in_recovery", "replication_lag_seconds", "cache_hit_pct_since_reset", "database_size_bytes"} {
 		if strings.Contains(got, absent) {
 			t.Errorf("field %q must be omitted when the metrics query failed, got %s", absent, got)
 		}
@@ -215,5 +215,31 @@ func TestWithPostgresConnectTimeout_PreservesCredentialsAndDatabase(t *testing.T
 	}
 	if parsed.Query().Get("connect_timeout") != "2" {
 		t.Errorf("expected connect_timeout=2, got %q", parsed.Query().Get("connect_timeout"))
+	}
+}
+
+// TestPostgresBody_CacheHitIsAPercentage pins the unit of the field. A 0..1
+// ratio is unusable in a condition: sanitizeAndResolveNumerical casts both
+// sides of a comparison to int64, so the value and its threshold both truncate
+// to 0 and no threshold works at all. The SQL expression must keep the * 100.
+func TestPostgresBody_CacheHitIsAPercentage(t *testing.T) {
+	t.Parallel()
+	pct := 99.7
+	marshalled, err := json.Marshal(postgresBody{CacheHitPctSinceReset: &pct})
+	if err != nil {
+		t.Fatalf("unexpected error: %s", err)
+	}
+	got := string(marshalled)
+	if !strings.Contains(got, `"cache_hit_pct_since_reset":99.7`) {
+		t.Errorf("expected cache_hit_pct_since_reset in body, got %s", got)
+	}
+	if strings.Contains(got, "cache_hit_ratio") {
+		t.Errorf("the old ratio field name must be gone, got %s", got)
+	}
+	if !strings.Contains(postgresMetricsQuery, "AS cache_hit_pct_since_reset") {
+		t.Error("the column alias must match the body field name")
+	}
+	if !strings.Contains(postgresMetricsQuery, "100 * sum(blks_hit)") {
+		t.Error("the metrics query must emit a percentage, not a 0..1 ratio")
 	}
 }
