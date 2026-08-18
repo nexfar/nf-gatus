@@ -38,20 +38,33 @@ type postgresBody struct {
 	MetricsMS float64      `json:"metrics_ms,omitempty"`
 	Probe     *probeResult `json:"probe,omitempty"`
 
-	Version    string `json:"version,omitempty"`
-	InRecovery bool   `json:"in_recovery"`
+	Version string `json:"version,omitempty"`
 
-	// The four fields below require pg_monitor membership. They are pointers so
-	// that they are omitted entirely when that grant is missing, rather than
-	// reported as a silently wrong zero.
+	// InRecovery, ReplicationLagSeconds, CacheHitRatioSinceReset and
+	// DatabaseSizeBytes are pointers so that a whole-query failure (e.g. a
+	// context deadline shared with connect+probe) leaves them absent rather
+	// than reporting them as a silently wrong zero.
+	InRecovery *bool `json:"in_recovery,omitempty"`
+
+	// The four fields below additionally require pg_monitor membership. They
+	// are pointers so that they are omitted entirely when that grant is
+	// missing, rather than reported as a silently wrong zero.
 	Connections                     *postgresConnections `json:"connections,omitempty"`
 	LongestRunningQuerySeconds      *float64             `json:"longest_running_query_seconds,omitempty"`
 	LongestIdleInTransactionSeconds *float64             `json:"longest_idle_in_transaction_seconds,omitempty"`
 	BlockedSessions                 *int64               `json:"blocked_sessions,omitempty"`
 
-	ReplicationLagSeconds float64 `json:"replication_lag_seconds"`
-	CacheHitRatio         float64 `json:"cache_hit_ratio"`
-	DatabaseSizeBytes     int64   `json:"database_size_bytes"`
+	ReplicationLagSeconds *float64 `json:"replication_lag_seconds,omitempty"`
+
+	// CacheHitRatioSinceReset is blks_hit / (blks_hit + blks_read) accumulated
+	// since the last pg_stat_database reset (typically server start), not an
+	// instantaneous rate. On a long-lived instance it is dominated by months
+	// of history, so a real, ongoing cache regression barely moves it; the
+	// name carries that caveat because it is the only thing a person writing
+	// a threshold will read.
+	CacheHitRatioSinceReset *float64 `json:"cache_hit_ratio_since_reset,omitempty"`
+
+	DatabaseSizeBytes *int64 `json:"database_size_bytes,omitempty"`
 
 	MetricsErrors []string `json:"metrics_errors,omitempty"`
 }
@@ -66,8 +79,12 @@ func defaultedProbeQuery(query, fallback string) string {
 
 // postgresMetricsQuery collects every gauge in a single round trip.
 //
-// Only gauges and instantaneous measurements appear here. Cumulative counters
-// (deadlocks, xact_rollback, ...) are deliberately excluded: Gatus checks are
+// Every field here is an instantaneous measurement, with one exception:
+// cache_hit_ratio (scanned into CacheHitRatioSinceReset) is a cumulative
+// average of blks_hit/blks_read since the last pg_stat_database reset
+// (typically server start), so it is slow to reflect a recent regression on
+// a long-lived instance. Cumulative counters proper (deadlocks,
+// xact_rollback, ...) are deliberately excluded entirely: Gatus checks are
 // stateless, so a counter has no previous value to diff against and cannot
 // express a meaningful threshold.
 //
@@ -106,19 +123,28 @@ func collectPostgresMetrics(ctx context.Context, db *sql.DB, body *postgresBody)
 		longestRunningQuery             float64
 		longestIdleInTransaction        float64
 		blockedSessions                 int64
+		replicationLagSeconds           float64
+		cacheHitRatioSinceReset         float64
+		databaseSizeBytes               int64
 	)
 	err := db.QueryRowContext(ctx, postgresMetricsQuery).Scan(
 		&version, &inRecovery, &hasPgMonitor,
 		&connectionsUsed, &connectionsMax,
 		&longestRunningQuery, &longestIdleInTransaction, &blockedSessions,
-		&body.ReplicationLagSeconds, &body.CacheHitRatio, &body.DatabaseSizeBytes,
+		&replicationLagSeconds, &cacheHitRatioSinceReset, &databaseSizeBytes,
 	)
 	if err != nil {
+		// Leave every metric field absent: the query failed as a whole, so
+		// none of these values were actually measured, and defaulting them
+		// to zero would let a condition pass on fiction.
 		body.MetricsErrors = append(body.MetricsErrors, "metrics query failed: "+redactCredentials(err.Error()))
 		return
 	}
 	body.Version = version
-	body.InRecovery = inRecovery
+	body.InRecovery = &inRecovery
+	body.ReplicationLagSeconds = &replicationLagSeconds
+	body.CacheHitRatioSinceReset = &cacheHitRatioSinceReset
+	body.DatabaseSizeBytes = &databaseSizeBytes
 	if !hasPgMonitor {
 		// Without pg_monitor, pg_stat_activity shows only this role's own
 		// sessions, so these four values would be silently wrong rather than

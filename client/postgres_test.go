@@ -71,13 +71,40 @@ func TestPostgresBody_OmitsUncollectableFields(t *testing.T) {
 		t.Fatalf("unexpected error: %s", err)
 	}
 	got := string(marshalled)
-	for _, absent := range []string{"connections", "longest_running_query_seconds", "blocked_sessions"} {
+	for _, absent := range []string{"connections", "longest_running_query_seconds", "longest_idle_in_transaction_seconds", "blocked_sessions"} {
 		if strings.Contains(got, absent) {
 			t.Errorf("field %q must be omitted when uncollectable, got %s", absent, got)
 		}
 	}
 	if !strings.Contains(got, "pg_monitor not granted") {
 		t.Errorf("expected metrics_errors to explain the omission, got %s", got)
+	}
+}
+
+func TestPostgresBody_OmitsAllMetricsWhenMetricsQueryFails(t *testing.T) {
+	t.Parallel()
+	// Simulates collectPostgresMetrics returning early because the metrics
+	// query itself failed (e.g. context deadline exceeded): only the fields
+	// set before the query ran are populated, everything the query would
+	// have produced must be absent rather than zero-defaulted.
+	body := postgresBody{
+		ConnectMS:     12,
+		ProbeMS:       3,
+		Probe:         &probeResult{Rows: 1, Value: int64(1)},
+		MetricsErrors: []string{"metrics query failed: context deadline exceeded"},
+	}
+	marshalled, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("unexpected error: %s", err)
+	}
+	got := string(marshalled)
+	for _, absent := range []string{"in_recovery", "replication_lag_seconds", "cache_hit_ratio_since_reset", "database_size_bytes"} {
+		if strings.Contains(got, absent) {
+			t.Errorf("field %q must be omitted when the metrics query failed, got %s", absent, got)
+		}
+	}
+	if !strings.Contains(got, "metrics query failed") {
+		t.Errorf("expected metrics_errors to explain the failure, got %s", got)
 	}
 }
 
