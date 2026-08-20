@@ -176,19 +176,49 @@ func collectMongoMetrics(ctx context.Context, cli *mongo.Client, body *mongoBody
 	collectMongoReplicationLag(ctx, admin, body)
 }
 
+// toDocument normalises an embedded BSON document to bson.M.
+//
+// The driver decodes an embedded document into bson.D even when the enclosing
+// document was decoded into bson.M, so a direct value.(bson.M) assertion on a
+// nested section never succeeds against a real server. Asserting only bson.M is
+// how every mongod on earth came to be reported as "not reported by this
+// backend". Both shapes are accepted so a hand-written bson.M fixture and a
+// server's bson.D behave identically.
+func toDocument(value any) (bson.M, bool) {
+	switch typed := value.(type) {
+	case bson.M:
+		return typed, true
+	case bson.D:
+		document := make(bson.M, len(typed))
+		for _, element := range typed {
+			document[element.Key] = element.Value
+		}
+		return document, true
+	}
+	return nil, false
+}
+
 // collectMongoServerStatus pulls the connection, lock and uptime gauges.
-// FerretDB accepts serverStatus but does not populate the mongod-internal
-// sections, so each is checked for presence rather than assumed.
 func collectMongoServerStatus(ctx context.Context, admin *mongo.Database, body *mongoBody) {
 	var status bson.M
 	if err := admin.RunCommand(ctx, bson.D{{Key: "serverStatus", Value: 1}}).Decode(&status); err != nil {
 		body.MetricsErrors = append(body.MetricsErrors, "serverStatus: "+redactCredentials(err.Error()))
 		return
 	}
+	applyMongoServerStatus(status, body)
+}
+
+// applyMongoServerStatus maps a decoded serverStatus document onto body. It is
+// separate from the command round trip so that every omission path can be
+// tested without a server - the same split applyMongoReplSetStatus uses.
+//
+// FerretDB accepts serverStatus but does not populate the mongod-internal
+// sections, so each is checked for presence rather than assumed.
+func applyMongoServerStatus(status bson.M, body *mongoBody) {
 	if uptime, ok := toInt64(status["uptime"]); ok {
 		body.UptimeSeconds = &uptime
 	}
-	connections, ok := status["connections"].(bson.M)
+	connections, ok := toDocument(status["connections"])
 	if !ok {
 		body.MetricsErrors = append(body.MetricsErrors,
 			"serverStatus: connections and globalLock are not reported by this backend")
@@ -203,16 +233,16 @@ func collectMongoServerStatus(ctx context.Context, admin *mongo.Database, body *
 		}
 		body.Connections = gauge
 	}
-	globalLock, ok := status["globalLock"].(bson.M)
+	globalLock, ok := toDocument(status["globalLock"])
 	if !ok {
 		return
 	}
-	if queue, ok := globalLock["currentQueue"].(bson.M); ok {
+	if queue, ok := toDocument(globalLock["currentQueue"]); ok {
 		if total, ok := toInt64(queue["total"]); ok {
 			body.GlobalLockQueueTotal = &total
 		}
 	}
-	if clients, ok := globalLock["activeClients"].(bson.M); ok {
+	if clients, ok := toDocument(globalLock["activeClients"]); ok {
 		if total, ok := toInt64(clients["total"]); ok {
 			body.ActiveClientsTotal = &total
 		}
@@ -258,7 +288,7 @@ func applyMongoReplSetStatus(status bson.M, body *mongoBody) {
 	var selfOptime, primaryOptime time.Time
 	var haveSelf, havePrimary bool
 	for _, raw := range members {
-		member, ok := raw.(bson.M)
+		member, ok := toDocument(raw)
 		if !ok {
 			continue
 		}

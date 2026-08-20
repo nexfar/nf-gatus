@@ -15,14 +15,25 @@ The same mechanism covers [FerretDB](https://www.ferretdb.com/) tenants (MongoDB
 wire protocol backed by PostgreSQL): the `mongodb://` type connects to it exactly as
 it would to real MongoDB, and simply gets a thinner body back.
 
-> ⚠️ **Nothing in this feature has run against a real PostgreSQL, MongoDB or
-> FerretDB server.** Everything below — including the FerretDB body shape — is
-> reasoned from the driver/protocol documentation and unit-tested against
-> fabricated responses, not observed on a live server. An integration stack
-> exists specifically to close this gap but its live run has not happened yet;
-> see
-> [`.examples/docker-compose-database-monitoring/README.md`](../.examples/docker-compose-database-monitoring/README.md)
-> and run it before trusting any of this in production.
+> **Verified against live servers on 2026-08-20** — PostgreSQL 16.15, MongoDB
+> 7.0.40 and FerretDB (DocumentDB backend), via
+> [`.examples/docker-compose-database-monitoring/README.md`](../.examples/docker-compose-database-monitoring/README.md),
+> plus a production PostgreSQL and MongoDB. Every body schema below is an
+> observed response, not a prediction, and both `pg_monitor` paths (granted and
+> missing) were exercised.
+>
+> That first live run immediately found a bug this document had asserted was
+> working: the MongoDB driver decodes an embedded document into `bson.D`, never
+> into `bson.M`, so the collector's `status["connections"].(bson.M)` assertion
+> failed against **every** real MongoDB — and the body then blamed the server
+> with `"connections and globalLock are not reported by this backend"`. The unit
+> tests missed it because they fabricated nested sections as `bson.M`, a shape
+> the driver does not produce. Fixed, with both shapes now asserted in
+> `TestApplyMongoServerStatus_NestedDocumentShapes`.
+>
+> Still unverified: a **replica set** (the stack is standalone, so
+> `replication_lag_seconds` and `repl_set_state` have never been populated) and
+> a **streaming replica** (`in_recovery: true`).
 
 ## Table of contents
 
@@ -305,7 +316,7 @@ Real MongoDB:
 |:--|:--|
 | `connect_ms`, `probe_ms`, `metrics_ms` | Phase timings, in milliseconds. |
 | `probe` | The raw reply to your probe command (default `{"ping": 1}` → `{"ok": 1}`). |
-| `backend` | `"mongodb"` or `"ferretdb"`, derived from `buildInfo`. See the FerretDB caveat below — **this label is not fully trustworthy yet.** |
+| `backend` | `"mongodb"` or `"ferretdb"`, derived from `buildInfo`. Confirmed correct against both on 2026-08-20. |
 | `version` | From `buildInfo`. |
 | `is_writable_primary` | From `hello`. |
 | `repl_set_state` | From `replSetGetStatus.myState`, decoded to a name (`PRIMARY`, `SECONDARY`, ...). Absent on a standalone deployment. |
@@ -340,17 +351,18 @@ not in FerretDB itself. The body is thinner by design, not by bug:
 }
 ```
 
-> ⚠️ **This shape is a prediction, not a confirmed observation.** The integration
-> test suite that exercises a live FerretDB instance did not run during
-> development — the Docker daemon required to bring up the stack was unavailable —
-> so `detectMongoBackend`'s heuristics (checking for a `ferretdb` key in `buildInfo`,
-> and for `"ferretdb"` inside the version string) have never actually seen a real
-> FerretDB response. The exact self-identification field FerretDB uses in
-> `buildInfo` remains an **open question**. Before relying on `[BODY].backend` in a
-> condition, confirm it against a live instance using
-> [`.examples/docker-compose-database-monitoring/README.md`](../.examples/docker-compose-database-monitoring/README.md),
-> which brings up a local PostgreSQL, MongoDB and FerretDB stack and runs the opt-in
-> integration tests against them.
+> **Observed on 2026-08-20**, and the two `metrics_errors` entries came back in
+> exactly the order predicted. Two corrections from that run:
+>
+> - **`version` is a MongoDB-compatibility version, not a FerretDB version.** The
+>   live instance reported `"7.0.77"`. Do not pattern-match `[BODY].version` to
+>   tell the two backends apart — use `[BODY].backend`.
+> - **`detectMongoBackend` works, and it is the `buildInfo` key that carries it**,
+>   not the version string. Since `version` is `7.0.77` with no `ferretdb`
+>   substring anywhere in it, the version-string branch of the heuristic never
+>   fires; the top-level `ferretdb` key in `buildInfo` is what identifies it. The
+>   version-string branch is retained as a fallback for other FerretDB releases
+>   but has still never been observed firing.
 
 Because the real signals live elsewhere, cover a FerretDB tenant with more than the
 `mongodb://` check:
@@ -410,9 +422,10 @@ GRANT CONNECT ON DATABASE <tenant> TO gatus_monitor;
 > column) and records why in `metrics_errors` instead of reporting the
 > misleading count. Grant `pg_monitor` if you want these fields at all.
 >
-> This reasoning follows PostgreSQL's documented `pg_stat_activity` column
-> visibility rules; it has **not** been verified against a live server — see the
-> notice at the top of this document.
+> Verified on 2026-08-20 against PostgreSQL 16.15, both ways: with `pg_monitor`
+> all four fields populate; with a role that has only `CONNECT`, all four are
+> absent and `metrics_errors` carries the explanation. The "fails visibly rather
+> than lying" guarantee holds on a live server.
 
 **MongoDB / FerretDB** — the equivalent is the built-in `clusterMonitor` role,
 granted on the `admin` database, e.g.:

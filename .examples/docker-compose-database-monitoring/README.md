@@ -63,13 +63,20 @@ Set the three environment variables the tests look for, then run them:
 ```console
 GATUS_TEST_POSTGRES_DSN="postgres://gatus_monitor:monitor@127.0.0.1:5432/tenant?sslmode=disable" \
 GATUS_TEST_MONGODB_URI="mongodb://root:root@127.0.0.1:27017/admin" \
-GATUS_TEST_FERRETDB_URI="mongodb://username:password@127.0.0.1:27018/postgres" \
+GATUS_TEST_FERRETDB_URI="mongodb://postgres:postgres@127.0.0.1:27018/postgres" \
   go test ./client/ -run 'Integration' -v
 ```
 
-The FerretDB credentials depend on how the `postgres-documentdb` image initializes its default
-user. If the FerretDB test reports a connection refused or an authentication error, check the
-container logs for the actual bootstrap credentials:
+FerretDB authenticates against its backing PostgreSQL, so the credentials are that database's —
+`postgres:postgres` for this stack, as set by `POSTGRES_USER`/`POSTGRES_PASSWORD` on the
+`ferretdb-postgres` service. (This file previously said `username:password`, which fails with a
+SCRAM-SHA-256 authentication error.) Connecting without credentials also succeeds, but then
+`serverStatus` comes back `(Unauthorized)` and the body loses `uptime_seconds`.
+
+Note also that `ferretdb` starts before `ferretdb-postgres` is accepting connections and logs a
+burst of `dial tcp ... connection refused` errors before settling. That is the startup race the
+`sleep 20` above covers — it is not a failure. If the FerretDB test still reports a connection or
+authentication error, check the container logs for the actual bootstrap credentials:
 
 ```console
 docker compose -f .examples/docker-compose-database-monitoring/compose.yaml logs ferretdb-postgres

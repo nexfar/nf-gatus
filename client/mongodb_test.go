@@ -304,3 +304,91 @@ func TestReplSetStateName(t *testing.T) {
 func float64Pointer(v float64) *float64 {
 	return &v
 }
+
+// TestApplyMongoServerStatus_NestedDocumentShapes is the regression test for a
+// bug that survived every unit test in this file and only surfaced against a
+// live mongod: the driver decodes an embedded document into bson.D, never into
+// bson.M, even when the enclosing document was decoded into bson.M. The
+// original code asserted status["connections"].(bson.M), which therefore failed
+// against every real MongoDB server, and the collector then blamed the server
+// with "not reported by this backend".
+//
+// The tests that missed it fabricated nested sections as bson.M — a shape the
+// driver does not produce — so the fabrication, not the code, was what passed.
+// Both shapes are asserted here so neither can regress: bson.D is what a server
+// actually sends, bson.M is what a hand-written fixture is likely to use.
+func TestApplyMongoServerStatus_NestedDocumentShapes(t *testing.T) {
+	scenarios := []struct {
+		name   string
+		status bson.M
+	}{
+		{
+			name: "nested-sections-as-bson-D-what-the-driver-really-returns",
+			status: bson.M{
+				"uptime": float64(891234),
+				"connections": bson.D{
+					{Key: "current", Value: int32(18)},
+					{Key: "available", Value: int32(82)},
+				},
+				"globalLock": bson.D{
+					{Key: "currentQueue", Value: bson.D{{Key: "total", Value: int32(3)}}},
+					{Key: "activeClients", Value: bson.D{{Key: "total", Value: int32(7)}}},
+				},
+			},
+		},
+		{
+			name: "nested-sections-as-bson-M",
+			status: bson.M{
+				"uptime": float64(891234),
+				"connections": bson.M{
+					"current":   int32(18),
+					"available": int32(82),
+				},
+				"globalLock": bson.M{
+					"currentQueue":  bson.M{"total": int32(3)},
+					"activeClients": bson.M{"total": int32(7)},
+				},
+			},
+		},
+	}
+	for _, scenario := range scenarios {
+		t.Run(scenario.name, func(t *testing.T) {
+			body := &mongoBody{}
+			applyMongoServerStatus(scenario.status, body)
+			if len(body.MetricsErrors) != 0 {
+				t.Fatalf("expected no metrics errors, got %v", body.MetricsErrors)
+			}
+			if body.Connections == nil {
+				t.Fatal("expected connections to be populated")
+			}
+			if body.Connections.Current != 18 || body.Connections.Available != 82 {
+				t.Errorf("expected current=18 available=82, got current=%d available=%d", body.Connections.Current, body.Connections.Available)
+			}
+			if body.Connections.UsedPct != 18 {
+				t.Errorf("expected used_pct=18, got %v", body.Connections.UsedPct)
+			}
+			if body.GlobalLockQueueTotal == nil || *body.GlobalLockQueueTotal != 3 {
+				t.Errorf("expected global_lock_queue_total=3, got %v", body.GlobalLockQueueTotal)
+			}
+			if body.ActiveClientsTotal == nil || *body.ActiveClientsTotal != 7 {
+				t.Errorf("expected active_clients_total=7, got %v", body.ActiveClientsTotal)
+			}
+			if body.UptimeSeconds == nil || *body.UptimeSeconds != 891234 {
+				t.Errorf("expected uptime_seconds=891234, got %v", body.UptimeSeconds)
+			}
+		})
+	}
+}
+
+// A backend that genuinely omits the sections — FerretDB — must still be
+// reported as such. The fix must not turn the real "absent" case into silence.
+func TestApplyMongoServerStatus_AbsentSectionsStillExplained(t *testing.T) {
+	body := &mongoBody{}
+	applyMongoServerStatus(bson.M{"uptime": float64(12)}, body)
+	if body.Connections != nil {
+		t.Error("expected connections to stay absent")
+	}
+	if len(body.MetricsErrors) != 1 || !strings.Contains(body.MetricsErrors[0], "not reported by this backend") {
+		t.Fatalf("expected the backend-omission error, got %v", body.MetricsErrors)
+	}
+}

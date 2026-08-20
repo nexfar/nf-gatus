@@ -155,12 +155,17 @@ func collectPostgresMetrics(ctx context.Context, db *sql.DB, body *postgresBody)
 	body.CacheHitPctSinceReset = &cacheHitPctSinceReset
 	body.DatabaseSizeBytes = &databaseSizeBytes
 	if !hasPgMonitor {
-		// Without pg_monitor, pg_stat_activity shows only this role's own
-		// sessions, so these four values would be silently wrong rather than
-		// merely missing. Omit them and say why.
+		// pg_stat_activity still emits one row per server-wide backend without
+		// pg_monitor - it is the privileged columns (query, state,
+		// wait_event_type) that come back NULL for backends this role does not
+		// own. The three aggregates below filter on exactly those columns, so
+		// without the grant they would silently undercount rather than error.
+		// A wrong number in a threshold is worse than no number: it looks
+		// healthy while lying. Omit all four and say why.
 		body.MetricsErrors = append(body.MetricsErrors,
 			"connections, longest_running_query_seconds, longest_idle_in_transaction_seconds and blocked_sessions omitted: "+
-				"the monitoring role lacks pg_monitor membership, so pg_stat_activity would report only its own sessions")
+				"the monitoring role lacks pg_monitor membership, so pg_stat_activity NULLs the state and wait_event_type "+
+				"columns these aggregates filter on, which would undercount rather than fail")
 		return
 	}
 	connections := &postgresConnections{Used: connectionsUsed, Max: connectionsMax}
