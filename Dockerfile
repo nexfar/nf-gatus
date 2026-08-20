@@ -1,5 +1,13 @@
 # Build the go application into a binary
-FROM golang:alpine AS builder
+#
+# The builder image is pinned deliberately. golang:alpine is a moving tag, and
+# Go 1.27 excludes golang.org/x/net/http2/server.go via the build constraint
+# "!(go1.27 && !http2legacy)" — x/net delegates to the standard library there and
+# stops exporting TrailerPrefix, which google.golang.org/grpc v1.81.1 still
+# references. An unpinned base therefore breaks the image build the day the tag
+# moves, with no change on our side. Unpin only after bumping grpc to a release
+# that no longer uses http2.TrailerPrefix.
+FROM golang:1.26-alpine AS builder
 RUN apk --update add ca-certificates
 WORKDIR /app
 COPY . ./
