@@ -15,6 +15,11 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
+// maximumMessageLength is the maximum number of characters accepted in the message query parameter.
+// Anything beyond that is truncated rather than rejected, because a health check must never be lost
+// on account of a cosmetic field.
+const maximumMessageLength = 255
+
 func CreateExternalEndpointResult(cfg *config.Config) fiber.Handler {
 	extraLabels := cfg.GetUniqueExtraMetricLabels()
 	return func(c *fiber.Ctx) error {
@@ -58,6 +63,14 @@ func CreateExternalEndpointResult(cfg *config.Config) fiber.Handler {
 		}
 		if errorFromQuery := c.Query("error"); !result.Success && len(errorFromQuery) > 0 {
 			result.AddError(errorFromQuery)
+		}
+		// Unlike the error query parameter, the message is kept whether the result is a success or a failure
+		if messageFromQuery := c.Query("message"); len(messageFromQuery) > 0 {
+			if runes := []rune(messageFromQuery); len(runes) > maximumMessageLength {
+				logr.Warnf("[api.CreateExternalEndpointResult] Truncating message of length=%d to %d characters for external endpoint with key=%s", len(runes), maximumMessageLength, key)
+				messageFromQuery = string(runes[:maximumMessageLength])
+			}
+			result.Message = messageFromQuery
 		}
 		convertedEndpoint := externalEndpoint.ToEndpoint()
 		if err := store.Get().InsertEndpointResult(convertedEndpoint, result); err != nil {

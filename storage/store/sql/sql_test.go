@@ -996,3 +996,30 @@ func TestStore_SyncEndpointDisplayNamesSkipsDuplicates(t *testing.T) {
 		t.Errorf("expected non-conflicting rename to be applied ('Third New Name'), got %q", status.Name)
 	}
 }
+
+func TestStore_EndpointResultMessagePersistence(t *testing.T) {
+	store, _ := NewStore("sqlite", t.TempDir()+"/TestStore_EndpointResultMessagePersistence.db", false, storage.DefaultMaximumNumberOfResults, storage.DefaultMaximumNumberOfEvents)
+	defer store.Close()
+	resultWithMessage := testSuccessfulResult
+	resultWithMessage.Message = "1523 registros sincronizados"
+	if err := store.InsertEndpointResult(&testEndpoint, &resultWithMessage); err != nil {
+		t.Fatal("expected no error, got", err.Error())
+	}
+	resultWithoutMessage := testUnsuccessfulResult
+	if err := store.InsertEndpointResult(&testEndpoint, &resultWithoutMessage); err != nil {
+		t.Fatal("expected no error, got", err.Error())
+	}
+	endpointStatus, err := store.GetEndpointStatus(testEndpoint.Group, testEndpoint.Name, paging.NewEndpointStatusParams().WithResults(1, 10))
+	if err != nil {
+		t.Fatal("expected no error, got", err.Error())
+	}
+	if len(endpointStatus.Results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(endpointStatus.Results))
+	}
+	if endpointStatus.Results[0].Message != "1523 registros sincronizados" {
+		t.Errorf("expected the message to be persisted, got %q", endpointStatus.Results[0].Message)
+	}
+	if endpointStatus.Results[1].Message != "" {
+		t.Errorf("expected a result inserted without a message to come back with an empty message, got %q", endpointStatus.Results[1].Message)
+	}
+}

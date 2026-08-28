@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/TwiN/gatus/v5/alerting"
@@ -171,6 +172,73 @@ func TestCreateExternalEndpointResult(t *testing.T) {
 		}
 		if externalEndpointFromConfig.NumberOfSuccessesInARow != 0 {
 			t.Errorf("expected 0 successes in a row but got %d", externalEndpointFromConfig.NumberOfSuccessesInARow)
+		}
+	})
+}
+
+func TestCreateExternalEndpointResultWithMessage(t *testing.T) {
+	defer store.Get().Clear()
+	defer cache.Clear()
+	cfg := &config.Config{
+		Alerting:    &alerting.Config{},
+		Maintenance: &maintenance.Config{},
+		ExternalEndpoints: []*endpoint.ExternalEndpoint{
+			{Name: "nm", Group: "gm", Token: "token"},
+		},
+	}
+	api := New(cfg)
+	router := api.Router()
+	longMessage := strings.Repeat("a", maximumMessageLength+50)
+	scenarios := []struct {
+		Name            string
+		Path            string
+		ExpectedMessage string
+	}{
+		{
+			Name:            "message-is-kept-on-success",
+			Path:            "/api/v1/endpoints/gm_nm/external?success=true&message=1523+registros+sincronizados",
+			ExpectedMessage: "1523 registros sincronizados",
+		},
+		{
+			Name:            "message-is-kept-on-failure-alongside-error",
+			Path:            "/api/v1/endpoints/gm_nm/external?success=false&error=boom&message=lote+parcial",
+			ExpectedMessage: "lote parcial",
+		},
+		{
+			Name:            "message-longer-than-maximum-is-truncated",
+			Path:            "/api/v1/endpoints/gm_nm/external?success=true&message=" + longMessage,
+			ExpectedMessage: strings.Repeat("a", maximumMessageLength),
+		},
+	}
+	for _, scenario := range scenarios {
+		t.Run(scenario.Name, func(t *testing.T) {
+			request := httptest.NewRequest("POST", scenario.Path, http.NoBody)
+			request.Header.Set("Authorization", "Bearer token")
+			response, err := router.Test(request)
+			if err != nil {
+				t.Fatalf("failed to send request: %s", err.Error())
+			}
+			defer response.Body.Close()
+			if response.StatusCode != 200 {
+				t.Fatalf("%s %s should have returned 200, but returned %d instead", request.Method, request.URL, response.StatusCode)
+			}
+		})
+	}
+	t.Run("verify-end-results", func(t *testing.T) {
+		endpointStatus, err := store.Get().GetEndpointStatus("gm", "nm", paging.NewEndpointStatusParams().WithResults(1, 10))
+		if err != nil {
+			t.Fatalf("failed to get endpoint status: %s", err.Error())
+		}
+		if len(endpointStatus.Results) != len(scenarios) {
+			t.Fatalf("expected %d results but got %d", len(scenarios), len(endpointStatus.Results))
+		}
+		for i, scenario := range scenarios {
+			if endpointStatus.Results[i].Message != scenario.ExpectedMessage {
+				t.Errorf("%s: expected message %q but got %q", scenario.Name, scenario.ExpectedMessage, endpointStatus.Results[i].Message)
+			}
+		}
+		if len(endpointStatus.Results[1].Errors) != 1 || endpointStatus.Results[1].Errors[0] != "boom" {
+			t.Errorf("expected the failed result to keep its error, but got %v", endpointStatus.Results[1].Errors)
 		}
 	})
 }
