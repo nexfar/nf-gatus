@@ -358,7 +358,7 @@ gatus-cli external-endpoint push --url https://status.example.org --key "core_ex
 
 or send an HTTP request:
 ```
-POST /api/v1/endpoints/{key}/external?success={success}&error={error}&duration={duration}
+POST /api/v1/endpoints/{key}/external?success={success}&error={error}&duration={duration}&message={message}
 ```
 Where:
 - `{key}` has the pattern `<GROUP_NAME>_<ENDPOINT_NAME>` in which both variables have ` `, `/`, `_`, `,`, `.`, `#`, `+` and `&` replaced by `-`.
@@ -366,6 +366,7 @@ Where:
 - `{success}` is a boolean (`true` or `false`) value indicating whether the health check was successful or not.
 - `{error}` (optional): a string describing the reason for a failed health check. If {success} is false, this should contain the error message; if the check is successful, this will be ignored.
 - `{duration}` (optional): the time that the request took as a duration string (e.g. 10s).
+- `{message}` (optional): a free-form message describing the result, displayed in the dashboard tooltip for that execution. Unlike `{error}`, it is kept whether the check succeeded or failed, which makes it the place to report context such as how many records a job processed. Messages longer than 255 characters are truncated.
 
 You must also pass the token as a `Bearer` token in the `Authorization` header.
 

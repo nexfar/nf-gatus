@@ -30,6 +30,12 @@ type Result struct {
 	// Errors encountered during the evaluation of the Endpoint's health
 	Errors []string `json:"errors,omitempty"`
 
+	// Message is an optional free-form message describing the result.
+	//
+	// Unlike Errors, it is kept regardless of whether the result is a success or a failure.
+	// It is currently only populated by external endpoints, which have no conditions to display.
+	Message string `json:"message,omitempty"`
+
 	// ConditionResults are the results of each of the Endpoint's Condition
 	ConditionResults []*ConditionResult `json:"conditionResults,omitempty"`
 

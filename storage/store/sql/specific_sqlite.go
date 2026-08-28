@@ -66,6 +66,7 @@ func (s *Store) createSQLiteSchema() error {
 			ip                     TEXT      NOT NULL,
 			duration               INTEGER   NOT NULL,
 			timestamp              TIMESTAMP NOT NULL,
+			message                TEXT      NOT NULL DEFAULT '',
 			suite_result_id        INTEGER   REFERENCES suite_results(suite_result_id) ON DELETE CASCADE
 		)
 	`)
@@ -142,6 +143,8 @@ func (s *Store) createSQLiteSchema() error {
 	_, _ = s.db.Exec(`ALTER TABLE endpoint_results ADD suite_result_id INTEGER REFERENCES suite_results(suite_result_id) ON DELETE CASCADE`)
 	// Create index for suite_result_id
 	_, _ = s.db.Exec(`CREATE INDEX IF NOT EXISTS endpoint_results_suite_result_id_idx ON endpoint_results(suite_result_id)`)
+	// Add message to endpoint_results, used by external endpoints to attach free-form context to a result
+	_, _ = s.db.Exec(`ALTER TABLE endpoint_results ADD message TEXT NOT NULL DEFAULT ''`)
 	// Note: SQLite doesn't support DROP COLUMN in older versions, so we skip this cleanup
 	// The suite_id column in endpoints table will remain but unused
 	return err

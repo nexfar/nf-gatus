@@ -64,6 +64,12 @@
         </div>
       </div>
       
+      <!-- Message (free-form context pushed by external endpoints, kept on success and failure alike) -->
+      <div v-if="result.message">
+        <div class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Message</div>
+        <div class="font-mono text-xs break-words max-w-xs">{{ result.message }}</div>
+      </div>
+
       <!-- Conditions (for endpoint results) -->
       <div v-if="!isSuiteResult && result.conditionResults && result.conditionResults.length">
         <div class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Conditions</div>
